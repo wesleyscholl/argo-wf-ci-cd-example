@@ -1,0 +1,46 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ci-cd-build
+  namespace: argo-events
+spec:
+  templates:
+    - name: build-workflow
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: argo-cli-build-step
+            template: argo-cli-build-template
+            arguments: {}
+        - - name: buildkit-step
+            arguments: {}
+            templateRef:
+              name: buildkit
+              template: main
+    - name: argo-cli-build-template
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            echo 'Building Argo CLI...'
+            git clone https://github.com/argoproj/argo-workflows.git
+            cd argo-workflows
+            apt-get update && apt-get install -y yarn
+            make cli
+            echo 'Argo CLI build complete'
+        workingDir: /go/src/github.com/argoproj/argo-workflows
+        resources: {}
+  entrypoint: build-workflow
+  arguments:
+    parameters:
+      - name: message
+        value: ''
+  serviceAccountName: operate-workflow-sa
