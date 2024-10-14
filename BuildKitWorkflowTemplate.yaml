@@ -54,6 +54,18 @@ spec:
             storage: 64Mi
   templates:
     - name: main
+      inputs:
+        parameters:
+          - name: repo
+            value: '{{workflow.parameters.repo}}'
+          - name: branch
+            value: '{{workflow.parameters.branch}}'
+          - name: path
+            value: '{{workflow.parameters.path}}'
+          - name: image
+            value: '{{workflow.parameters.image}}'
+      outputs: {}
+      metadata: {}
       dag:
         tasks:
           - name: clone
@@ -61,25 +73,25 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "{{workflow.parameters.repo}}"
+                  value: '{{inputs.parameters.repo}}'
                 - name: branch
-                  value: "{{workflow.parameters.branch}}"
+                  value: '{{inputs.parameters.branch}}'
           - name: build
             template: build
             arguments:
               parameters:
                 - name: path
-                  value: "{{workflow.parameters.path}}"
-            depends: "clone"
+                  value: '{{inputs.parameters.path}}'
+            depends: clone
           - name: image
             template: image
             arguments:
               parameters:
                 - name: path
-                  value: "{{workflow.parameters.path}}"
+                  value: '{{inputs.parameters.path}}'
                 - name: image
-                  value: "{{workflow.parameters.image}}"
-            depends: "build"
+                  value: '{{inputs.parameters.image}}'
+            depends: build
     - name: clone
       inputs:
         parameters:

@@ -1,5 +1,3 @@
-apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
 metadata:
   name: ci-cd-build
   namespace: argo-events
@@ -14,7 +12,16 @@ spec:
             template: argo-cli-build-template
             arguments: {}
         - - name: buildkit-step
-            arguments: {}
+            arguments:
+              parameters:
+                - name: repo
+                  value: https://github.com/argoproj/argo-workflows
+                - name: branch
+                  value: master
+                - name: path
+                  value: test/e2e/images/argosay/v2
+                - name: image
+                  value: alexcollinsintuit/argosay:v2
             templateRef:
               name: buildkit
               template: main
