@@ -1,32 +1,153 @@
 metadata:
-  name: ci-cd-build
+  name: buildkit
   namespace: argo-events
+  uid: 848a9469-db84-4132-8797-e0c5d9c6d177
+  resourceVersion: '2385365'
+  generation: 62
+  creationTimestamp: '2024-10-14T18:53:57Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-16T15:35:19Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
 spec:
   templates:
-    - name: build-workflow
+    - name: main
       inputs: {}
       outputs: {}
       metadata: {}
-      steps:
-        - - name: argo-cli-build-step
-            template: argo-cli-build-template
-            arguments: {}
-        - - name: buildkit-step
+      dag:
+        tasks:
+          - name: clone-repo
+            template: clone-repo
             arguments:
               parameters:
                 - name: repo
-                  value: https://github.com/argoproj/argo-workflows
+                  value: '{{workflow.parameters.repo}}'
                 - name: branch
-                  value: master
+                  value: '{{workflow.parameters.branch}}'
+          - name: build-executor
+            template: build-executor
+            arguments:
+              parameters:
                 - name: path
-                  value: test/e2e/images/argosay/v2
+                  value: '{{workflow.parameters.path}}'
+            depends: clone-repo
+          - name: build-cli
+            template: build-cli
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: clone-repo
+          - name: create-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
                 - name: image
-                  value: alexcollinsintuit/argosay:v2
-            templateRef:
-              name: buildkit
-              template: main
-    - name: argo-cli-build-template
-      inputs: {}
+                  value: '{{workflow.parameters.image}}'
+            depends: [build-cli, build-executor]
+          - name: run-tests
+            template: run-tests
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: image
+          - name: run-coverage
+            template: run-coverage
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: run-tests
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: run-coverage
+          - name: run-e2e-tests
+            template: run-e2e-tests
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: deploy
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1'
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}'
+          - .
+        workingDir: /work
+        resources: {}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: build-executor
+      inputs:
+        parameters:
+          - name: path
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            echo 'Building Argo Executor...'
+            apt-get update 
+            apt-get install -y curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y nodejs
+            npm install -g yarn@latest
+            cd /work
+            make controller kit STATIC_FILES=false
+            echo 'Argo Executor build complete'
+        workingDir: /work/
+        env:
+          - name: GO111MODULE
+            value: 'on'
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: build-cli
+      inputs:
+        parameters:
+          - name: path
       outputs: {}
       metadata: {}
       container:
@@ -38,16 +159,216 @@ spec:
         args:
           - |
             echo 'Building Argo CLI...'
-            git clone https://github.com/argoproj/argo-workflows.git
-            cd argo-workflows
-            apt-get update && apt-get install -y yarn
-            make cli
+            apt-get update 
+            apt-get install -y curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+            apt-get install -y nodejs
+            npm install -g yarn@latest
+            cd /work
+            make cli STATIC_FILES=false
             echo 'Argo CLI build complete'
-        workingDir: /go/src/github.com/argoproj/argo-workflows
-        resources: {}
-  entrypoint: build-workflow
+        workingDir: /work/
+        env:
+          - name: GO111MODULE
+            value: 'on'
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: image
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: moby/buildkit:v0.9.3-rootless
+        command:
+          - buildctl-daemonless.sh
+        args:
+          - build
+          - '--frontend'
+          - dockerfile.v0
+          - '--local'
+          - context=.
+          - '--local'
+          - dockerfile=.
+          - '--output'
+          - type=image,name=docker.io/{{inputs.parameters.image}},push=true
+        workingDir: /work/
+        env:
+          - name: BUILDKITD_FLAGS
+            value: '--oci-worker-no-process-sandbox'
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+        readinessProbe:
+          exec:
+            command:
+              - sh
+              - '-c'
+              - buildctl debug workers
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+    - name: run-tests
+      inputs:
+        parameters:
+          - name: path
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo 'Running unit tests...'
+            
+            make test STATIC_FILES=false GOTEST='go test -p 20 -covermode=atomic
+            -coverprofile=coverage.out'
+
+            echo 'Unit tests completed.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: run-coverage
+      inputs:
+        parameters:
+          - name: path
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            echo 'Collecting code coverage...'
+            make coverage STATIC_FILES=false
+            cat coverage.out
+            echo 'Coverage report collected.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: deploy
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: bitnami/kubectl:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            echo 'Deploying to cluster...'
+            # Pull the image from Docker Hub
+            docker pull {{inputs.parameters.image}}
+            # Tag the image
+            docker tag {{inputs.parameters.image}} argo-workflows:latest
+            # Setup the kind cluster
+            kind create cluster --name argo
+            # Load the image into the kind cluster
+            kind load docker-image argo-workflows:latest --name argo
+            # Apply the manifests
+            kubectl apply -f /work/argo-workflows/manifests/install.yaml
+            echo 'Deployment successful.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: run-e2e-tests
+      inputs:
+        parameters:
+          - name: path
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            echo 'Running E2E tests...'
+            sudo apt-get -y install socat
+            # Don't need, previously built
+            #make controller kit STATIC_FILES=false
+            make start PROFILE=mysql \
+            AUTH_MODE=client STATIC_FILES=false \
+            LOG_LEVEL=info \
+            API=true \
+            UI=false \
+            POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+            make wait PROFILE=mysql API=true
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            echo 'E2E tests completed. Collecting reports...'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+  entrypoint: main
   arguments:
     parameters:
-      - name: message
-        value: ''
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
   serviceAccountName: operate-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}

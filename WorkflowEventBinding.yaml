@@ -1,0 +1,48 @@
+kubectl apply -f - <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowEventBinding
+metadata:
+  name: event-consumer
+  namespace: argo-events
+spec:
+  event:
+    selector: payload.repo != "" && payload.branch != ""
+  submit:
+    workflowTemplateRef:
+      name: buildkit
+    arguments:
+      parameters:
+        - name: repo
+          valueFrom:
+            event: payload.repository.html_url
+        - name: branch
+          valueFrom:
+            event: payload.ref
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: submit-workflow-template
+  namespace: argo-events
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workfloweventbindings
+    verbs:
+      - list
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflowtemplates
+    verbs:
+      - get
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflows
+    verbs:
+      - create
+EOF
