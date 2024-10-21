@@ -1,0 +1,199 @@
+metadata:
+  name: argo-ci-deploy
+  namespace: argo-events
+  uid: 424f1bd1-ab2b-498a-ac16-2faed271550c
+  resourceVersion: '2798139'
+  generation: 15
+  creationTimestamp: '2024-10-21T15:33:04Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-21T16:23:43Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1'
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}'
+          - .
+        workingDir: /work
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: deploy
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo "Installing dependencies..."
+
+            sudo -V || apt-get update && apt-get install -y sudo
+
+            sudo apt-get -y install socat
+
+            apt-get update && apt-get install -y curl tar
+
+            echo "Installing go..."
+
+            curl -LO https://dl.google.com/go/go1.17.5.linux-amd64.tar.gz
+
+            tar -C /usr/local -xzf go1.17.5.linux-amd64.tar.gz
+
+            export PATH=$PATH:/usr/local/go/bin
+
+            go version
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+            kubectl version --client
+
+            echo "Installing Docker..."
+
+            curl -fsSL https://get.docker.com -o get-docker.sh
+
+            sudo sh get-docker.sh
+
+            # Set docker path
+
+            export PATH=$PATH:/usr/bin/docker
+
+            # Start docker and daemon
+
+            sudo systemctl start docker
+
+            sudo systemctl enable docker
+
+            sudo systemctl enable docker.service
+
+            sudo systemctl enable containerd.service
+
+            sudo systemctl status docker
+
+            echo "Installing Minikube..."
+
+            curl -LO
+            https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+
+            sudo install minikube-linux-amd64 /usr/local/bin/minikube && rm
+            minikube-linux-amd64
+
+            minikube version
+
+            echo "Starting Minikube, creating a cluster..."
+
+            minikube start --driver=docker
+
+            minikube status
+
+            minikube kubectl -- get pods
+
+            echo "Loading the image into Minikube..."
+
+            minikube image load {{inputs.parameters.image}}
+
+
+
+
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 8Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-socket
+            mountPath: /var/run/docker.sock
+          - name: lib-modules
+            mountPath: /lib/modules
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
+  serviceAccountName: operate-workflow-sa
+  volumes:
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+    - name: lib-modules
+      hostPath:
+        path: /lib/modules
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}

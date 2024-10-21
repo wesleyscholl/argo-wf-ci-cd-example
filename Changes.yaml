@@ -1,0 +1,186 @@
+metadata:
+  name: git-changed-files
+  namespace: argo-events
+  uid: 474ac2b1-5bf6-4b2b-8e53-26323a797df1
+  resourceVersion: '2769322'
+  generation: 18
+  creationTimestamp: '2024-10-21T12:33:43Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-21T13:23:12Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: 
+        parameters:
+          - name: common
+            valueFrom: /tmp/common.txt
+          - name: tests
+            valueFrom: /tmp/tests.txt
+          - name: e2e-tests
+            valueFrom: /tmp/e2e-tests.txt
+          - name: codegen
+            valueFrom: /tmp/codegen.txt
+          - name: lint
+            valueFrom: /tmp/lint.txt
+          - name: ui
+            valueFrom: /tmp/ui.txt
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git
+        command:
+          - /bin/sh
+          - '-c'
+        args:
+          - >
+            # Clone the repository
+
+            git clone {{workflow.parameters.repo}}.git /work &&
+
+            cd /work &&
+
+
+            # Fetch and checkout the branch
+
+            git fetch --all &&
+
+            git checkout
+            {{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}} &&
+
+
+            # Detect changes
+
+            git diff --name-only origin/main..HEAD > /tmp/changed_files.txt &&
+
+            echo "Changed files:" &&
+
+            cat /tmp/changed_files.txt &&
+
+
+            # Define the categories for file changes
+
+            COMMON='\.github/workflows/ci-build.yaml|Makefile|tasks.yaml'
+
+            TESTS="$COMMON|cmd/|config/|errors/|persist/|pkg/|server/|test/|util/|workflow/|go.mod|go.sum"
+
+            E2E_TESTS="$TESTS|Dockerfile|manifests/|sdks/|examples/|hack/test-examples.sh"
+
+            CODEGEN="$COMMON|api/|docs/fields.md|docs/executor_swagger.md|docs/cli/|pkg/|sdks/java/|sdks/python/|cmd/|examples/|manifests/|hack/api/|hack/docs/|hack/manifests/|.clang-format"
+
+            LINT="$TESTS|.golangci.yml|.github/workflows/|docs/|hack/docs/|.markdownlint.yaml|.mlc_config.json|mkdocs.yml|!docs/fields.md|!docs/executor_swagger.md|!docs/cli/**|!docs/proposals/**|hack/docs/copy-readme.sh|hack/docs/check-env-doc.sh|.spelling"
+
+            UI="$COMMON|ui/"
+
+
+            # Check for changes in each category and set corresponding flags
+
+            OUTPUT=/tmp/output.txt
+
+            touch $OUTPUT
+            touch /tmp/common.txt
+            touch /tmp/tests.txt
+            touch /tmp/e2e-tests.txt
+            touch /tmp/codegen.txt
+            touch /tmp/lint.txt
+            touch /tmp/ui.txt
+
+            
+            if grep -q -E "$COMMON" /tmp/changed_files.txt; then
+              echo "common=true" >> $OUTPUT;
+              echo "true" >> /tmp/common.txt
+            else
+              echo "common=false" >> $OUTPUT;
+              echo "false" >> /tmp/common.txt
+            fi
+
+
+            if grep -q -E "$TESTS" /tmp/changed_files.txt; then
+              echo "tests=true" >> $OUTPUT;
+              echo "true" >> /tmp/tests.txt
+            else
+              echo "tests=false" >> $OUTPUT;
+              echo "false" >> /tmp/tests.txt
+            fi
+
+
+            if grep -q -E "$E2E_TESTS" /tmp/changed_files.txt; then
+              echo "e2e-tests=true" >> $OUTPUT;
+              echo "true" >> /tmp/e2e-tests.txt
+            else
+              echo "e2e-tests=false" >> $OUTPUT;
+              echo "false" >> /tmp/e2e-tests.txt
+            fi
+
+
+            if grep -q -E "$CODEGEN" /tmp/changed_files.txt; then
+              echo "codegen=true" >> $OUTPUT;
+              echo "true" >> /tmp/codegen.txt
+            else
+              echo "codegen=false" >> $OUTPUT;
+              echo "false" >> /tmp/codegen.txt
+            fi
+
+
+            if grep -q -E "$LINT" /tmp/changed_files.txt; then
+              echo "lint=true" >> $OUTPUT;
+              echo "true" >> /tmp/lint.txt
+            else
+              echo "lint=false" >> $OUTPUT;
+              echo "false" >> /tmp/lint.txt
+            fi
+
+
+            if grep -q -E "$UI" /tmp/changed_files.txt; then
+              echo "ui=true" >> $OUTPUT;
+              echo "true" >> /tmp/ui.txt
+            else
+              echo "ui=false" >> $OUTPUT;
+              echo "false" >> /tmp/ui.txt
+            fi
+
+
+            # Output results
+
+            echo "Job Results:"
+
+            cat $OUTPUT
+        resources: {}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/testing-123
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
+  serviceAccountName: operate-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}

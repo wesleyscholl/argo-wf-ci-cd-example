@@ -1,24 +1,6 @@
 metadata:
-  name: buildkit
+  name: ci-workflow
   namespace: argo-events
-  uid: 848a9469-db84-4132-8797-e0c5d9c6d177
-  resourceVersion: '2385365'
-  generation: 62
-  creationTimestamp: '2024-10-14T18:53:57Z'
-  labels:
-    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
-  managedFields:
-    - manager: argo
-      operation: Update
-      apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-16T15:35:19Z'
-      fieldsType: FieldsV1
-      fieldsV1:
-        f:metadata:
-          f:labels:
-            .: {}
-            f:workflows.argoproj.io/creator: {}
-        f:spec: {}
 spec:
   templates:
     - name: main
@@ -57,14 +39,14 @@ spec:
                   value: '{{workflow.parameters.path}}'
                 - name: image
                   value: '{{workflow.parameters.image}}'
-            depends: [build-cli, build-executor]
+            depends: build-cli && build-executor
           - name: run-tests
             template: run-tests
             arguments:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
-            depends: image
+            depends: create-image
           - name: run-coverage
             template: run-coverage
             arguments:
@@ -78,6 +60,8 @@ spec:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
             depends: run-coverage
           - name: run-e2e-tests
             template: run-e2e-tests
@@ -178,7 +162,7 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
-    - name: image
+    - name: create-image
       inputs:
         parameters:
           - name: path
@@ -240,7 +224,7 @@ spec:
         args:
           - >
             echo 'Running unit tests...'
-            
+
             make test STATIC_FILES=false GOTEST='go test -p 20 -covermode=atomic
             -coverprofile=coverage.out'
 
@@ -269,7 +253,7 @@ spec:
           - |
             echo 'Collecting code coverage...'
             make coverage STATIC_FILES=false
-            cat coverage.out
+            go tool cover -func=coverage.out
             echo 'Coverage report collected.'
         workingDir: /work/
         resources:
@@ -288,23 +272,88 @@ spec:
       metadata: {}
       container:
         name: ''
-        image: bitnami/kubectl:latest
+        image: golang:1.23
         command:
           - sh
           - '-c'
         args:
           - |
             echo 'Deploying to cluster...'
-            # Pull the image from Docker Hub
-            docker pull {{inputs.parameters.image}}
-            # Tag the image
-            docker tag {{inputs.parameters.image}} argo-workflows:latest
-            # Setup the kind cluster
+            # Install podman
+            apt-get update && apt-get install -y podman
+
+            # install docker
+            apt-get update && apt-get install -y docker.io
+            # Start the docker service
+            systemctl start docker
+            # Start the podman service
+            systemctl start podman
+            # Install kind
+            apt-get update && apt-get install -y curl
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.11.1/kind-linux-amd64
+            chmod +x ./kind
+            mv ./kind /usr/bin/kind
+            # Install kubectl
+            apt-get update && apt-get install -y kubectl
+            # Ensure kind is in the PATH
+            export PATH=$PATH:$(go env GOPATH)/bin
+            # Ensure kubectl is in the PATH
+            export PATH=$PATH:$(go env GOPATH)/bin
+            # Ensure podman is in the PATH
+            export PATH=$PATH:/usr/bin
+            
+            # Create a kind cluster
             kind create cluster --name argo
+            # Set the kubeconfig to the kind cluster
+            export KUBECONFIG="$(kind get kubeconfig-path --name="argo")"
+            # Set the context to the kind cluster
+            kubectl config use-context kind-argo 
+            # Download the image using podman from dockerhub
+            podman pull {{inputs.parameters.image}}
+
+
             # Load the image into the kind cluster
-            kind load docker-image argo-workflows:latest --name argo
-            # Apply the manifests
-            kubectl apply -f /work/argo-workflows/manifests/install.yaml
+            kind load docker-image {{inputs.parameters.image}} --name argo
+            # Create the namespace
+            kubectl create namespace argo
+            # Create the deployment manifest
+            cat <<EOF > deployment.yaml
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: argo
+              namespace: argo
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: argo
+              template:
+                metadata:
+                  labels:
+                    app: argo
+                spec:
+                  containers:
+                  - name: argo
+                    image: {{inputs.parameters.image}}
+                    ports:
+                    - containerPort: 8080
+            EOF
+
+            # Service account
+
+            kubectl create clusterrolebinding operate-workflow-sa-binding
+            --clusterrole=cluster-admin
+            --serviceaccount=argo-events:operate-workflow-sa
+
+
+
+            # Apply the deployment with service account
+            kubectl apply -f deployment.yaml -n argo --serviceaccount=operate-workflow-sa
+            # Watch the deployment
+            kubectl rollout status deployment/argo -n argo
+            # Wait for the deployment to be ready
+            kubectl wait --for=condition=available --timeout=5m deployment/argo -n argo
             echo 'Deployment successful.'
         workingDir: /work/
         resources:
@@ -372,3 +421,668 @@ spec:
           requests:
             storage: 64Mi
       status: {}
+
+
+---
+
+metadata:
+  name: ci-workflow-deploy
+  namespace: argo-events
+  uid: 15608dea-9f74-467d-a7e0-c846c0064bd1
+  resourceVersion: '2487565'
+  generation: 76
+  creationTimestamp: '2024-10-17T17:30:43Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-18T00:33:47Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+    - name: deploy
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo 'Deploying to cluster...'
+
+            # Install podman
+
+            apt-get update && apt-get install -y curl podman
+
+            # Check if registries.conf exists
+
+            REGISTRIES_CONF="/etc/containers/registries.conf"
+
+            # Backup the original file if it exists
+
+            if [ -f "$REGISTRIES_CONF" ]; then
+
+                echo "Backing up the original registries.conf file..."
+
+                cp $REGISTRIES_CONF "$REGISTRIES_CONF.bak"
+
+            else
+
+                echo "Creating a new registries.conf file..."
+
+                mkdir -p /etc/containers
+
+            fi
+
+            # Write the configuration to registries.conf
+
+            echo "[registries.search]" > $REGISTRIES_CONF
+
+            echo "registries = ['docker.io', 'quay.io']" >> $REGISTRIES_CONF
+
+
+            apt-get install -y curl
+
+            # Install kind
+
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.11.1/kind-linux-amd64
+
+            chmod +x ./kind
+
+            mv ./kind /usr/bin/kind
+
+            # Install kubectl
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            # Ensure kind is in the PATH
+
+            export PATH=$PATH:$(go env GOPATH)/bin
+
+            # Ensure kubectl is in the PATH
+
+            export PATH=$PATH:$(go env GOPATH)/bin
+
+            # Ensure podman is in the PATH
+
+            export PATH=$PATH:/usr/bin
+
+            # Download the image from dockerhub
+
+            podman pull docker.io/{{inputs.parameters.image}} 
+
+            # Make the image available to the kind cluster
+
+      
+
+
+
+            # Create a kind cluster
+
+            kind create cluster --name argo-test
+
+            # Set the kubeconfig to the kind cluster
+
+            export KUBECONFIG="$(kind get kubeconfig-path --name="argo-test")"
+
+            # Set the context to the kind cluster 
+
+            kubectl config use-context kind-argo-test 
+
+            # Load the image into the kind cluster
+
+            kind load docker-image {{inputs.parameters.image}} --name argo-test
+
+            # Create the namespace
+
+            kubectl create namespace argo-test
+
+            # Service account
+
+            kubectl create clusterrolebinding operate-workflow-sa-binding
+            --clusterrole=cluster-admin
+            --serviceaccount=argo-events:operate-workflow-sa
+
+            # Create the deployment manifest
+
+            cat <<EOF > deployment.yaml
+
+            apiVersion: apps/v1
+
+            kind: Deployment
+
+            metadata:
+              name: argo-test
+              namespace: argo-test
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: argo
+              template:
+                metadata:
+                  labels:
+                    app: argo
+                spec:
+                  containers:
+                  - name: argo
+                    image: {{inputs.parameters.image}}
+                    ports:
+                    - containerPort: 8080
+            EOF
+
+            # Apply the deployment with service account
+
+            kubectl apply -f deployment.yaml
+
+            # Watch the deployment
+
+            kubectl rollout status deployment/argo -n argo-test
+
+            # Wait for the deployment to be ready
+
+            kubectl wait --for=condition=available --timeout=5m
+            deployment/argo-test -n argo-test
+
+            echo 'Deployment successful.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-socket
+            mountPath: /var/run/docker.sock
+          - name: lib-modules
+            mountPath: /lib/modules
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
+  serviceAccountName: operate-workflow-sa
+  volumes:
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+    - name: lib-modules
+      hostPath:
+        path: /lib/modules
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}
+
+
+---
+
+metadata:
+  name: ci-workflow-deploy
+  namespace: argo-events
+  uid: 15608dea-9f74-467d-a7e0-c846c0064bd1
+  resourceVersion: '2489237'
+  generation: 77
+  creationTimestamp: '2024-10-17T17:30:43Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-18T12:39:19Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+                
+    - name: deploy
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            # Install socat
+
+            sudo apt-get -y install socat
+
+            # Clone Repo
+
+            git clone --depth 1 --branch {{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}} --single-branch {{inputs.parameters.repo}} .
+
+            # Install Go
+
+            sudo add-apt-repository ppa:longsleep/golang-backports
+
+            sudo apt update
+
+            sudo apt install golang-go
+
+            # Install Docker
+
+            sudo apt install docker-ce
+
+            # Install K3S
+
+            if ! echo "" | egrep '^v[0-9]+\.[0-9]+\.[0-9]+\+k3s1$'; then
+              export INSTALL_K3S_VERSION=v1.31.0+k3s1
+            else
+              export INSTALL_K3S_VERSION=
+            fi
+
+
+            curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable \
+              INSTALL_K3S_EXEC="--docker --kubelet-arg=config=${GITHUB_WORKSPACE}/test/e2e/manifests/kubelet-configuration.yaml" \
+              K3S_KUBECONFIG_MODE=644 \
+              sh -
+            until kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml cluster-info ;
+            do sleep 10s ; done
+
+            cp /etc/rancher/k3s/k3s.yaml /home/runner/.kubeconfig
+
+            echo "- name: fake_token_user" >> $KUBECONFIG
+
+            echo "  user:" >> $KUBECONFIG
+
+            echo "    token: xxxxxx" >> $KUBECONFIG
+
+            until kubectl cluster-info ; do sleep 10s ; done
+
+
+            # Download the image from dockerhub
+
+            docker pull docker.io/{{inputs.parameters.image}}
+
+            # Load the image into the K3S cluster
+
+            docker save {{inputs.parameters.image}} | k3s ctr images import -
+
+            # Configure /etc/hosts
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            # Install manifests
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            # Build Controller
+
+            make controller kit STATIC_FILES=false
+
+            # Build CLI
+
+            make cli STATIC_FILES=false
+
+            # Start Controller and API
+            
+            make start PROFILE=minimal \
+            AUTH_MODE=client STATIC_FILES=false \
+            LOG_LEVEL=info \
+            API=false \
+            UI=false \
+            POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+
+            # Wait for the Controller and API to be ready
+
+            make wait PROFILE=minimal API=false
+
+            # Run E2E tests for the CLI
+
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            
+            echo 'E2E tests successful.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-socket
+            mountPath: /var/run/docker.sock
+          - name: lib-modules
+            mountPath: /lib/modules
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
+  serviceAccountName: operate-workflow-sa
+  volumes:
+    - name: docker-socket
+      hostPath:
+        path: /var/run/docker.sock
+    - name: lib-modules
+      hostPath:
+        path: /lib/modules
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}
+
+
+
+metadata:
+  name: ci-deploy-steps
+  namespace: argo-events
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: create-cluster
+            template: create-cluster
+          - name: pull-and-load-image
+            template: pull-and-load-image
+            arguments:
+              parameters:
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+
+    - name: create-cluster
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: docker.io/library/alpine:3.12
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo 'Creating a kind cluster...'
+
+            # Install curl
+
+            apk add --no-cache curl
+
+            # Install kind
+
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.11.1/kind-linux-amd64
+
+            chmod +x ./kind
+
+            mv ./kind /usr/bin/kind
+
+            # Create a kind cluster
+
+            kind create cluster --name argo
+
+            # Set the kubeconfig to the kind cluster
+
+            export KUBECONFIG="$(kind get kubeconfig-path --name="argo")"
+
+            echo 'Kind cluster created successfully.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+
+    - name: pull-and-load-image
+      inputs:
+        parameters:
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: docker.io/library/alpine:3.12
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo 'Pulling image from dockerhub...'
+
+            docker pull {{inputs.parameters.image}}
+
+            echo 'Loading image into the kind cluster...'
+
+            # Load the image into the kind cluster
+
+            kind load docker-image {{inputs.parameters.image}} --name argo
+
+            echo 'Image loaded successfully.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      
+
+    - name: deploy
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: kubectl:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            echo 'Deploying to cluster...'
+            # Create the namespace
+
+            kubectl create namespace argo
+
+            # Service account
+
+            kubectl create clusterrolebinding operate-workflow-sa-binding \
+
+            --clusterrole=cluster-admin \
+
+            --serviceaccount=argo-events:operate-workflow-sa
+
+
+            # Create the deployment manifest
+
+
+            cat <<EOF > deployment.yaml
+
+
+            apiVersion: apps/v1
+
+
+            kind: Deployment
+
+
+            metadata:
+              name: argo
+              namespace: argo
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: argo
+              template:
+                metadata:
+                  labels:
+                    app: argo
+                spec:
+                  containers:
+                  - name: argo
+                    image: {{inputs.parameters.image}}
+                    ports:
+                    - containerPort: 8080
+            EOF
+
+
+            # Apply the deployment with service account
+
+            kubectl apply -f deployment.yaml -n argo --serviceaccount=operate-workflow-sa
+
+
+            # Watch the deployment
+
+
+            kubectl rollout status deployment/argo -n argo 
+
+
+            # Wait for the deployment to be ready
+
+
+            kubectl wait --for=condition=available --timeout=5m deployment/argo -n argo
+
+
+            echo 'Deployment successful.'
+        workingDir: /work/
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: image
+        value: wesmsl/argocli:v1
+  serviceAccountName: operate-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}
+
+

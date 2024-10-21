@@ -1,7 +1,7 @@
+kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  namespace: argo-events
   name: operate-workflow-role
 rules:
   - apiGroups: [""]
@@ -10,3 +10,56 @@ rules:
   - apiGroups: ["argoproj.io"]
     resources: ["workflows", "workflowtemplates"]
     verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+EOF
+
+# ClusterRoleBinding binding for the service account above
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: operate-workflow-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: operate-workflow-sa
+    namespace: po-optimization
+roleRef:
+  kind: ClusterRole
+  name: operate-workflow-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-workflow-cluster-role
+rules:
+  - apiGroups: ["", "apps", "rbac.authorization.k8s.io"]
+    resources: ["deployments", "clusterrolebindings", "namespaces"]
+    verbs: ["create", "get", "list", "watch", "update", "delete"]
+EOF
+
+
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflow-sa-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-workflow-cluster-role
+subjects:
+  - kind: ServiceAccount
+    name: operate-workflow-sa
+    namespace: argo-events
+EOF
