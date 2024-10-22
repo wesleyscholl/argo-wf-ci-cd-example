@@ -1,17 +1,17 @@
 metadata:
-  name: argo-ci-deploy
+  name: a-k8s-cluster-create
   namespace: argo-events
-  uid: 424f1bd1-ab2b-498a-ac16-2faed271550c
-  resourceVersion: '2798139'
-  generation: 15
-  creationTimestamp: '2024-10-21T15:33:04Z'
+  uid: be3af12d-46f8-4cd3-a367-9bfe13a80d82
+  resourceVersion: '2907755'
+  generation: 27
+  creationTimestamp: '2024-10-21T22:47:20Z'
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
   managedFields:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-21T16:23:43Z'
+      time: '2024-10-22T15:44:02Z'
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -21,179 +21,174 @@ metadata:
         f:spec: {}
 spec:
   templates:
-    - name: main
+    - name: create-and-interact
       inputs: {}
       outputs: {}
       metadata: {}
-      dag:
-        tasks:
-          - name: deploy
-            template: deploy
-            arguments:
-              parameters:
-                - name: repo
-                  value: '{{workflow.parameters.repo}}'
-                - name: branch
-                  value: '{{workflow.parameters.branch}}'
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.image}}'
-    - name: clone-repo
-      inputs:
-        parameters:
-          - name: repo
-          - name: branch
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: alpine/git:v2.26.2
-        args:
-          - clone
-          - '--depth'
-          - '1'
-          - '--branch'
-          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
-          - '--single-branch'
-          - '{{inputs.parameters.repo}}'
-          - .
-        workingDir: /work
-        resources:
-          requests:
-            cpu: '2'
-            memory: 4Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
-    - name: deploy
-      inputs:
-        parameters:
-          - name: path
-          - name: image
+      steps:
+        - - name: create-cluster
+            template: k3d-create-cluster
+            arguments: {}
+    - name: k3d-create-cluster
+      inputs: {}
       outputs: {}
       metadata: {}
       container:
         name: ''
         image: ubuntu:latest
         command:
-          - sh
+          - /bin/sh
           - '-c'
         args:
           - >
-            echo "Installing dependencies..."
-
-            sudo -V || apt-get update && apt-get install -y sudo
-
-            sudo apt-get -y install socat
-
-            apt-get update && apt-get install -y curl tar
-
-            echo "Installing go..."
-
-            curl -LO https://dl.google.com/go/go1.17.5.linux-amd64.tar.gz
-
-            tar -C /usr/local -xzf go1.17.5.linux-amd64.tar.gz
-
-            export PATH=$PATH:/usr/local/go/bin
-
-            go version
-
-            echo "Installing kubectl..."
-
-            curl -LO "https://dl.k8s.io/release/$(curl -L -s
-            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-
-            kubectl version --client
-
-            echo "Installing Docker..."
-
-            curl -fsSL https://get.docker.com -o get-docker.sh
-
-            sudo sh get-docker.sh
-
-            # Set docker path
-
-            export PATH=$PATH:/usr/bin/docker
-
-            # Start docker and daemon
-
-            sudo systemctl start docker
-
-            sudo systemctl enable docker
-
-            sudo systemctl enable docker.service
-
-            sudo systemctl enable containerd.service
-
-            sudo systemctl status docker
-
-            echo "Installing Minikube..."
-
-            curl -LO
-            https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-
-            sudo install minikube-linux-amd64 /usr/local/bin/minikube && rm
-            minikube-linux-amd64
-
-            minikube version
-
-            echo "Starting Minikube, creating a cluster..."
-
-            minikube start --driver=docker
-
-            minikube status
-
-            minikube kubectl -- get pods
-
-            echo "Loading the image into Minikube..."
-
-            minikube image load {{inputs.parameters.image}}
+            apt-get update
 
 
+            DEBIAN_FRONTEND=noninteractive 
 
 
-        workingDir: /work/
+            apt-get install -y curl sudo systemd systemd-sysv dbus udev procps
+            cgroup-lite cgroup-tools
+
+
+            cd /
+
+
+            mount -t proc proc /proc
+
+
+            mount -t sysfs sys /sys
+
+
+            mount -t tmpfs tmp /tmp
+
+
+            mkdir -p /run/systemd
+
+
+            mount -t tmpfs run /run
+
+
+            mkdir -p /run/lock
+
+
+            curl -sSLf https://get.k0s.sh | sudo sh
+
+
+            k0s install controller --single --enable-worker --no-taints
+
+
+            mkdir -p /etc/k0s
+
+
+            cat > /etc/k0s/k0s.yaml <<EOF
+
+            apiVersion: k0s.k0sproject.io/v1beta1
+
+            kind: ClusterConfig
+
+            metadata:
+              name: k0s
+            spec:
+              api:
+                extraArgs:
+                  anonymous-auth: "true"
+              storage:
+                type: etcd
+              network:
+                provider: calico
+              controllerManager: {}
+              scheduler: {}
+              extensions:
+                helm:
+                  repositories:
+                  - name: stable
+                    url: https://charts.helm.sh/stable
+              workloadRuntime:
+                containerd:
+                  configPath: /etc/k0s/containerd.toml
+            EOF
+
+
+            mkdir -p /etc/k0s
+
+
+            cat > /etc/k0s/containerd.toml <<EOF
+
+            version = 2
+
+            root = "/var/lib/k0s/containerd"
+
+            state = "/run/k0s/containerd"
+
+
+            [grpc]
+              address = "/run/k0s/containerd.sock"
+
+            [plugins."io.containerd.grpc.v1.cri"]
+              enable_selinux = false
+              sandbox_image = "k8s.gcr.io/pause:3.7"
+            EOF
+
+
+            k0s start
+
+
+            timeout=300
+
+
+            echo "Waiting for k0s API server to be ready (timeout:
+            ${timeout}s)..."
+
+
+            start_time=$(date +%s)
+
+
+            while true; do
+              if k0s status 2>/dev/null; then
+                echo "k0s API server is ready"
+                break
+              fi
+              
+              current_time=$(date +%s)
+
+              elapsed=$((current_time - start_time))
+
+              if [ $elapsed -ge $timeout ]; then
+                echo "Timeout waiting for k0s API server"
+                exit 1
+              fi
+              
+              echo "Still waiting... (${elapsed}s elapsed)"
+              sleep 5
+            done
+
+
+            echo "Waiting for node to be ready..."
+
+            until k0s kubectl get nodes | grep -q " Ready"; do
+              sleep 5
+            done
+
+
+            k0s kubectl get nodes
+
+
+            k0s kubectl get pods -A
         resources:
           requests:
             cpu: '2'
-            memory: 8Gi
+            memory: 4Gi
         volumeMounts:
-          - name: work
-            mountPath: /work
-          - name: docker-socket
-            mountPath: /var/run/docker.sock
-          - name: lib-modules
-            mountPath: /lib/modules
-  entrypoint: main
-  arguments:
-    parameters:
-      - name: repo
-        value: https://github.com/konjo-open-src/argo-workflows
-      - name: branch
-        value: refs/heads/main
-      - name: path
-        value: argo-workflows
-      - name: image
-        value: wesmsl/argocli:v1
-  serviceAccountName: operate-workflow-sa
-  volumes:
-    - name: docker-socket
-      hostPath:
-        path: /var/run/docker.sock
-    - name: lib-modules
-      hostPath:
-        path: /lib/modules
-  volumeClaimTemplates:
-    - metadata:
-        name: work
-        creationTimestamp: null
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: 64Mi
-      status: {}
+          - name: systemd
+            readOnly: true
+            mountPath: /sys/fs/cgroup
+          - name: dbus
+            mountPath: /var/run/dbus
+        securityContext:
+          privileged: true
+          runAsUser: 0
+  entrypoint: create-and-interact
+  arguments: {}
+
+

@@ -2,8 +2,8 @@ metadata:
   name: ci-workflow
   namespace: argo-events
   uid: 46efd2bf-456a-4622-a1e3-ce2b72812e9b
-  resourceVersion: '2750715'
-  generation: 4
+  resourceVersion: '2868404'
+  generation: 10
   creationTimestamp: '2024-10-16T17:18:11Z'
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
@@ -11,7 +11,7 @@ metadata:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-19T17:01:04Z'
+      time: '2024-10-21T23:41:18Z'
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -35,30 +35,45 @@ spec:
                   value: '{{workflow.parameters.repo}}'
                 - name: branch
                   value: '{{workflow.parameters.branch}}'
-          
-          - name: build-executor-create-image
-            template: build-executor-create-image
+          - name: build-executor
+            template: build-executor
             arguments:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
             depends: clone-repo
-
-          - name: build-cli-create-image
-            template: build-cli-create-image
+          - name: build-cli
+            template: build-cli
             arguments:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
-            depends: clone-repo
-
+            depends: build-executor
+          - name: create-exec-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.exec-image}}'
+            depends: build-cli
+          - name: create-cli-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.cli-image}}'
+            depends: create-exec-image
           - name: run-tests
             template: run-tests
             arguments:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
-            depends: build-cli-create-image, build-executor-create-image
+            depends: create-cli-image
           - name: run-coverage
             template: run-coverage
             arguments:
@@ -72,8 +87,10 @@ spec:
               parameters:
                 - name: path
                   value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.image}}'
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
             depends: run-coverage
           - name: run-e2e-tests
             template: run-e2e-tests
@@ -104,46 +121,11 @@ spec:
         workingDir: /work
         resources:
           requests:
-            cpu: '2'
-            memory: 4Gi
+            cpu: '1'
+            memory: 2Gi
         volumeMounts:
           - name: work
             mountPath: /work
-
-    - name: build-executor-create-image
-      steps:
-        - - name: build-executor
-            template: build-executor
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-        - - name: create-image
-            template: create-image
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.exec-image}}'
-
-    - name: build-cli-create-image
-      steps:
-        - - name: build-cli
-            template: build-cli
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-        - - name: create-image
-            template: create-image
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.cli-image}}'
-
     - name: build-executor
       inputs:
         parameters:
@@ -181,7 +163,7 @@ spec:
             value: 'on'
         resources:
           requests:
-            cpu: '2'
+            cpu: '4'
             memory: 4Gi
         volumeMounts:
           - name: work
@@ -223,7 +205,7 @@ spec:
             value: 'on'
         resources:
           requests:
-            cpu: '2'
+            cpu: '4'
             memory: 4Gi
         volumeMounts:
           - name: work
@@ -341,7 +323,8 @@ spec:
       inputs:
         parameters:
           - name: path
-          - name: image
+          - name: cli-image
+          - name: exec-image
       outputs: {}
       metadata: {}
       container:
@@ -353,10 +336,13 @@ spec:
         args:
           - |
             echo 'Deploying to cluster...'
-            # Pull the image from Docker Hub
-            docker pull {{inputs.parameters.image}}
-            # Tag the image
-            docker tag {{inputs.parameters.image}} argo-workflows:latest
+            # Pull the images from Docker Hub
+            docker pull {{inputs.parameters.cli-image}}
+            docker pull {{inputs.parameters.exec-image}}
+            # Tag the cli image
+            docker tag {{inputs.parameters.cli-image}} argo-cli:latest
+            # Tag the exec image
+            docker tag {{inputs.parameters.exec-image}} argo-exec:latest
             # Setup the kind cluster
             kind create cluster --name argo
             # Load the image into the kind cluster
