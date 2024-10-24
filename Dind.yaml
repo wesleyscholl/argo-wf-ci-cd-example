@@ -1,0 +1,352 @@
+metadata:
+  name: dind-workflow
+  namespace: argo-events
+  uid: 98288a84-1eb7-48b8-8098-21bc8ae49faa
+  resourceVersion: '3033807'
+  generation: 57
+  creationTimestamp: '2024-10-22T20:14:27Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-23T21:13:15Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+        - - name: dind
+            template: dind
+            arguments:
+              parameters:
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1'
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}'
+          - .
+        workingDir: /work
+        resources:
+          requests:
+            cpu: '1'
+            memory: 2Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: dind
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            apt-get update
+
+            # Install dependencies
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo golang make socat
+
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+
+            sudo apt-get install -y lsof
+
+            # Test make command
+
+            make --version
+
+            # Increase inotify and file-max limits
+
+            echo "Increasing inotify and file-max limits..."
+
+            sudo sysctl -w fs.inotify.max_user_watches=2097152
+
+            sudo sysctl -w fs.file-max=2097152
+
+            echo "Persisting the changes to /etc/sysctl.conf..."
+
+            echo "fs.inotify.max_user_watches=2097152" | sudo tee -a
+            /etc/sysctl.conf
+
+            echo "fs.file-max=2097152" | sudo tee -a /etc/sysctl.conf
+
+            echo "Reloading sysctl settings..."
+
+            sudo sysctl -p
+
+            echo "Increasing file descriptor limits in
+            /etc/security/limits.conf..."
+
+            echo "* soft nofile 65536" | sudo tee -a /etc/security/limits.conf
+
+            echo "* hard nofile 65536" | sudo tee -a /etc/security/limits.conf
+
+            # Install k3d
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            # Install kubectl
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            # Download and configure Docker
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            # Wait for Docker 
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            # Configure and increase docker ufile limits - /etc/docker/daemon.json
+
+            echo "Configuring and increasing docker file limits..."
+
+            echo '{ "default-ulimits": { "nofile": { "Name": "nofile", "Hard": 1048576, "Soft": 1048576 } } }' | sudo tee /etc/docker/daemon.json
+
+            # Confirm the docker ufile changes
+
+            echo "Confirming the docker file limit changes..."
+
+            cat /etc/docker/daemon.json
+
+            # Restart Docker
+
+            echo "Restarting Docker..."
+
+            sudo systemctl restart docker 
+
+            # Wait for Docker to be ready
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            # Pull the images from docker hub
+
+            echo "Pulling images from docker hub..."
+
+            docker pull {{inputs.parameters.exec-image}}
+
+            docker pull {{inputs.parameters.cli-image}}
+
+            docker images
+
+            # Create k3d cluster
+
+            echo "Creating k3d cluster..."
+
+            k3d cluster create mycluster --kubeconfig-switch-context --runtime-args '--ulimit nofile=1048576:1048576'
+
+            # Wait for k3d cluster to be ready
+
+            echo "Waiting for k3d cluster to be ready..."
+
+            until kubectl cluster-info; do sleep 3; done
+
+            echo "k3d is ready. Running commands..."
+
+            # Merge kubeconfig - set context to k3d cluster
+
+            echo "Merging kubeconfig and switching context to k3d cluster..."
+
+            k3d kubeconfig merge mycluster --kubeconfig-switch-context
+
+            kubectl cluster-info
+
+            kubectl version
+
+            # Load the images into the k3d cluster
+
+            echo "Loading images into k3d cluster..."
+
+            docker save {{inputs.parameters.exec-image}} -o /tmp/argoexec.tar
+
+            docker save {{inputs.parameters.cli-image}} -o /tmp/argocli.tar
+
+            docker load < /tmp/argoexec.tar
+
+            docker load < /tmp/argocli.tar
+
+            # Set up the hosts file
+
+            echo "Setting up the hosts file..."
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            # Install manifests
+
+            echo "Installing manifests..."
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Ensure that pods are running
+
+            echo "Checking that pods are running..."
+
+            kubectl get pods -n argo
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Build argo workflow CLI
+
+            echo "Building argo workflow CLI..."
+
+            make cli STATIC_FILES=false
+
+            # Start argo workflow controller & API
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
+            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true
+
+            # Wait for argo workflow controller to be ready
+
+            echo "Waiting for argo workflow controller to be ready..."
+
+            until grep -q 'API server listening at' /tmp/argo.log; do sleep 3;
+            done
+
+            make wait PROFILE=mysql API=true
+
+            # Run E2E tests for CLI
+
+            echo "Running E2E tests for CLI..."
+
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+        workingDir: /work/
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+        resources:
+          requests:
+            cpu: '8'
+            memory: 8Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: cli-image
+        value: quay.io/argoproj/argocli:latest
+      - name: exec-image
+        value: quay.io/argoproj/argoexec:latest
+  serviceAccountName: operate-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+      status: {}

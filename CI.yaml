@@ -329,7 +329,7 @@ spec:
       metadata: {}
       container:
         name: ''
-        image: google/cloud-sdk:latest
+        image: docker:19.03.12
         command:
           - sh
           - '-c'
@@ -343,6 +343,12 @@ spec:
             docker tag {{inputs.parameters.cli-image}} argo-cli:latest
             # Tag the exec image
             docker tag {{inputs.parameters.exec-image}} argo-exec:latest
+            # Load the images into the exsiitng cluster (argo workflows is running in)
+            docker load < /images/argo-cli.tar
+            docker load < /images/argo-exec.tar
+
+            # Apply the manifests
+            kubectl apply -f /manifests/install.yaml
             # Setup the kind cluster
             kind create cluster --name argo
             # Load the image into the kind cluster
