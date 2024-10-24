@@ -2,8 +2,8 @@ metadata:
   name: dind-workflow
   namespace: argo-events
   uid: 98288a84-1eb7-48b8-8098-21bc8ae49faa
-  resourceVersion: '3033807'
-  generation: 57
+  resourceVersion: '3061843'
+  generation: 64
   creationTimestamp: '2024-10-22T20:14:27Z'
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
@@ -11,7 +11,7 @@ metadata:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-23T21:13:15Z'
+      time: '2024-10-24T19:34:39Z'
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -208,7 +208,7 @@ spec:
 
             echo "Creating k3d cluster..."
 
-            k3d cluster create mycluster --kubeconfig-switch-context --runtime-args '--ulimit nofile=1048576:1048576'
+            k3d cluster create argo-cluster --kubeconfig-switch-context
 
             # Wait for k3d cluster to be ready
 
@@ -222,7 +222,7 @@ spec:
 
             echo "Merging kubeconfig and switching context to k3d cluster..."
 
-            k3d kubeconfig merge mycluster --kubeconfig-switch-context
+            k3d kubeconfig merge argo-cluster --kubeconfig-switch-context
 
             kubectl cluster-info
 
@@ -254,57 +254,98 @@ spec:
 
             echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
 
-            # Install manifests
+            # Pull the Docker images
 
-            echo "Installing manifests..."
+            echo "Pulling the Docker images..."
 
-            make install PROFILE=minimal STATIC_FILES=false
+            docker pull argoproj/argocli:latest 
 
-            # Build workflow controller
+            docker pull argoproj/workflow-controller:latest 
 
-            echo "Building workflow controller..."
+            docker pull argoproj/argoexec:latest
 
-            make controller kit STATIC_FILES=false
+            # Load the Docker images into the k3d cluster
 
-            # Ensure that pods are running
+            echo "Loading the Docker images into the k3d cluster..."
 
-            echo "Checking that pods are running..."
+            k3d image import argoproj/argocli:latest -c argo-cluster 
 
-            kubectl get pods -n argo
+            k3d image import argoproj/workflow-controller:latest -c argo-cluster
 
-            # Build workflow controller
+            k3d image import argoproj/argoexec:latest -c argo-cluster
 
-            echo "Building workflow controller..."
+            # Deploy Argo Workflows to the k3d cluster
 
-            make controller kit STATIC_FILES=false
+            echo "Deploying Argo Workflows to the k3d cluster..."
 
-            # Build argo workflow CLI
+            kubectl create namespace argo kubectl apply -n argo -f
+            https://raw.githubusercontent.com/argoproj/argo-workflows/stable/manifests/install.yaml
 
-            echo "Building argo workflow CLI..."
+            # Use the loaded images in the k3d cluster
 
-            make cli STATIC_FILES=false
+            echo "Using the loaded images in the k3d cluster..."
 
-            # Start argo workflow controller & API
+            kubectl set image deployment/argo-server
+            argo-server=argoproj/argocli:latest -n argo
 
-            echo "Starting argo workflow controller & API..."
+            kubectl set image deployment/workflow-controller
+            workflow-controller=argoproj/workflow-controller:latest -n argo
 
-            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
-            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true
+            kubectl set image deployment/argoexec
+            argoexec=argoproj/argoexec:latest -n argo
 
-            # Wait for argo workflow controller to be ready
+            # Refresh the pods with the new images
 
-            echo "Waiting for argo workflow controller to be ready..."
+            echo "Refreshing the pods with the new images..."
 
-            until grep -q 'API server listening at' /tmp/argo.log; do sleep 3;
-            done
+            kubectl rollout restart deployment/argo-server -n argo 
 
-            make wait PROFILE=mysql API=true
+            kubectl rollout restart deployment/workflow-controller -n argo
 
-            # Run E2E tests for CLI
+            kubectl rollout restart deployment/argoexec -n argo
 
-            echo "Running E2E tests for CLI..."
+            # Wait for the pods to be ready
 
-            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            echo "Waiting for the pods to be ready..."
+
+            kubectl wait --for=condition=available --timeout=300s
+
+            # Run the Argo Workflows server
+
+            make start PROFILE=minimal AUTH_MODE=client STATIC_FILES=false LOG_LEVEL=info API=false UI=false
+
+            # Wait for the Argo Workflows server to be ready
+
+            echo "Waiting for the Argo Workflows server to be ready..."
+
+            until curl -s localhost:2746; do sleep 3; done
+
+            # Run E2E corefunctional tests
+
+            echo "Running E2E corefunctional tests..."
+
+            make test-corefunctional E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+
+
+            # 
+
+            apt-get update
+
+            apt-get install -y curl
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            k3d cluster create mycluster --api-port 6550 -p
+            8080:80@loadbalancer;
+            
+            # output the cluster kubeconfig into the /kubeconfig file
+
+            k3d kubeconfig get mycluster > /kubeconfig
+
+
         workingDir: /work/
         env:
           - name: DOCKER_HOST
@@ -348,5 +389,5 @@ spec:
           - ReadWriteOnce
         resources:
           requests:
-            storage: 10Gi
+            storage: 5Gi
       status: {}
