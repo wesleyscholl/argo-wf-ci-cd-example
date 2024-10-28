@@ -74,7 +74,10 @@ spec:
         parameters:
           - name: cli-image
           - name: exec-image
-      outputs: {}
+      outputs: 
+        - name: result
+          valueFrom: 
+            path: /tmp/e2e-corefunctional.log 
       metadata: {}
       container:
         name: ''
@@ -146,6 +149,16 @@ spec:
             chmod +x kubectl
 
             mv kubectl /usr/local/bin/
+
+            # Install Kustomize
+
+            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+
+            mv kustomize /usr/local/bin/
+
+            # Check kustomize version
+
+            kustomize version
 
             # Download and configure Docker
 
@@ -322,30 +335,89 @@ spec:
 
             # Run E2E corefunctional tests
 
-            echo "Running E2E corefunctional tests..."
+            echo "Running E2E CLI tests..."
 
-            make test-corefunctional E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            # Collect the output from the next command into a file
 
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
 
-            # 
+            # Collect the test results and output as an artifact
 
-            apt-get update
-
-            apt-get install -y curl
-
-            echo "Installing k3d..."
-
-            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
-            | bash
-
-            k3d cluster create mycluster --api-port 6550 -p
-            8080:80@loadbalancer;
-            
-            # output the cluster kubeconfig into the /kubeconfig file
-
-            k3d kubeconfig get mycluster > /kubeconfig
+            echo "Collecting the test results..."
 
 
+            # Change directory to manifest directory
+
+
+
+            # Update deployment manifests using kustomize edit set image
+
+            echo "Updating the images using kustomize..."
+
+            kustomize edit set image argoproj/argocli:latest=wesmsl/argocli:latest
+
+            # Commit deployment manifest changes
+
+            echo "Committing the changes..."
+
+            # Set up git
+
+            git config --global user.email "wesleyscholl@gmail.com"
+
+            git config --global user.name "Wesley Scholl"
+
+            git add .
+
+            git commit -m "Updated deployment manifests"
+
+            git push
+
+            # Install argocd
+
+            echo "Installing Argo CD..."
+
+            kubectl create namespace argocd
+
+            kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+            # Wait for Argo CD to be ready
+
+            echo "Waiting for Argo CD to be ready..."
+
+            until kubectl get pods -n argocd | grep -q 'Running'; do sleep 3; done
+
+            # Log in to Argo CD
+
+            echo "Logging in to Argo CD..."
+
+            argocd login localhost:2746 --username admin --password admin --insecure
+
+
+
+
+
+            # Start Argo CD sync step to deploy the updated images
+
+            echo "Starting Argo CD sync step..."
+
+            argocd app sync cd-workflow
+
+            # Wait for the sync step to complete
+
+            echo "Waiting for the sync step to complete..."
+
+            until argocd app list | grep -q 'Synced'; do sleep 3; done
+
+            # Verify the sync step
+
+            echo "Verifying the sync step..."
+
+            argocd app list
+
+        resources: {}
+        volumeMounts:
+          - name: kubeconfig-vol
+            mountPath: /mnt
         workingDir: /work/
         env:
           - name: DOCKER_HOST

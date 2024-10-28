@@ -11,9 +11,7 @@
 - [Cloning and Building the Argo CLI](#cloning-and-building-the-argo-cli)
 - [Creating a build images and pushing to docker hub image registry](#creating-a-build-images-and-pushing-to-docker-hub-image-registry)
 - [Running unit tests, coverage and collect test reports](#running-unit-tests-coverage-and-collect-test-reports)
-- [Installation](#installation)
-- [Usage](#usage)
-- [License](#license)
+
 
 
 ## GitHub Webhooks Configuration
@@ -53,9 +51,6 @@ spec:
 ```
 
 
-
-
-
 ### Argo Events
 
 Uses a event source endpoint, sensor and trigger to submit a `WorkflowTemplate` or `ClusterWorkflowTemplate`.
@@ -83,8 +78,6 @@ spec:
       method: POST # HTTP Method - POST to send request data 
       port: "12000" # Assigning the port for the webhook
 ```
-
-
 
 
 - Webhook Endpoint URL:
@@ -316,6 +309,7 @@ kubectl create secret generic docker-config --from-literal="config.json={\"auths
         volumeMounts:
           - name: work # Shared volume
             mountPath: /work
+            
     - name: run-coverage
       inputs:
         parameters:
@@ -348,4 +342,231 @@ kubectl create secret generic docker-config --from-literal="config.json={\"auths
         volumeMounts:
           - name: work # Shared volume
             mountPath: /work
+```
+
+## Deploying to a cluster
+
+```yaml
+    - name: prepare-deploy-to-cluster
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            apt-get update
+
+            # Install dependencies
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo golang make socat
+
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+
+            sudo apt-get install -y lsof
+
+            # Test make command
+
+            make --version
+
+            # Install k3d
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            # Install kubectl
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            # Download and configure Docker
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            # Wait for Docker 
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            # Configure and increase docker ufile limits -
+            /etc/docker/daemon.json
+
+            echo "Configuring and increasing docker file limits..."
+
+            echo '{ "default-ulimits": { "nofile": { "Name": "nofile", "Hard":
+            1048576, "Soft": 1048576 } } }' | sudo tee /etc/docker/daemon.json
+
+            # Confirm the docker ufile changes
+
+            echo "Confirming the docker file limit changes..."
+
+            cat /etc/docker/daemon.json
+
+            # Restart Docker
+
+            echo "Restarting Docker..."
+
+            sudo systemctl restart docker 
+
+            # Wait for Docker to be ready
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            # Pull the images from docker hub
+
+            echo "Pulling images from docker hub..."
+
+            docker pull {{inputs.parameters.exec-image}}
+
+            docker pull {{inputs.parameters.cli-image}}
+
+            docker images
+
+            # Create k3d cluster
+
+            echo "Creating k3d cluster..."
+
+            k3d cluster create argocluster --kubeconfig-switch-context
+
+            # Wait for k3d cluster to be ready
+
+            echo "Waiting for k3d cluster to be ready..."
+
+            until kubectl cluster-info; do sleep 3; done
+
+            echo "k3d is ready. Running commands..."
+
+            # Merge kubeconfig - set context to k3d cluster
+
+            echo "Merging kubeconfig and switching context to k3d cluster..."
+
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context
+
+            kubectl cluster-info
+
+            kubectl version
+
+            # Load the images into the k3d cluster
+
+            echo "Loading images into k3d cluster..."
+
+            docker save {{inputs.parameters.exec-image}} -o /tmp/argoexec.tar
+
+            docker save {{inputs.parameters.cli-image}} -o /tmp/argocli.tar
+
+            docker load < /tmp/argoexec.tar
+
+            docker load < /tmp/argocli.tar
+
+            # Set up the hosts file
+
+            echo "Setting up the hosts file..."
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            # Install manifests
+
+            echo "Installing manifests..."
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Ensure that pods are running
+
+            echo "Checking that pods are running..."
+
+            kubectl get pods -n argo
+
+            # Build argo workflow CLI
+
+            echo "Building argo workflow CLI..."
+
+            make cli STATIC_FILES=false
+
+            # Start argo workflow controller & API
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
+            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true >
+            /tmp/argo.log 2>&1 &
+
+            # Wait for argo workflow controller to be ready
+
+            make wait PROFILE=mysql API=true  
+
+            # Run E2E tests for CLI
+
+            echo "Running E2E tests for CLI..."
+
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+        workingDir: /work/
+        env: # env to connect to the docker sidecar
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+        resources: # Adjust as needed
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts: # Shared volume
+          - name: work
+            mountPath: /work
+      sidecars: # Docker dind sidecar
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true # Required
+          mirrorVolumeMounts: true
 ```

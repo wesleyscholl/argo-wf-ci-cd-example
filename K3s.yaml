@@ -1,0 +1,93 @@
+metadata:
+  name: aa-k3d-cluster
+  namespace: argo-events
+  uid: 98f3998c-7461-4a1b-be0d-0a12cb939b85
+  resourceVersion: '3101110'
+  generation: 11
+  creationTimestamp: '2024-10-24T20:29:01Z'
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: '2024-10-25T15:00:15Z'
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: create-cluster
+            template: create-cluster
+            arguments: {}
+    - name: create-cluster
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            apt-get update;
+
+            apt-get install -y curl;
+
+            echo "Installing k3s...";
+
+            # Download k3s binary
+
+            curl https://github.com/k3s-io/k3s/releases/download/v1.31.1%2Bk3s1/k3s-airgap-images-amd64.tar.gz -o k3s-airgap-images-amd64.tar.gz;
+
+            sudo k3s server &
+
+            sudo k3s kubectl get nodes;
+
+            # Wait for k3s to be ready
+
+            while [ ! -f /etc/rancher/k3s/k3s.yaml ]; do sleep 1; done;
+
+            cp /etc/rancher/k3s/k3s.yaml /mnt/kubeconfig;
+        
+            sudo kubectl get nodes;
+
+            # Get cluster info
+
+            sudo kubectl cluster-info;
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+        resources:
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts:
+          - name: kubeconfig-vol
+            mountPath: /mnt
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+    
+  entrypoint: main
+  arguments: {}
+  serviceAccountName: operate-workflow-sa
+
+

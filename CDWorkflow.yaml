@@ -1,0 +1,53 @@
+metadata:
+  name: cd-workflow
+  namespace: argo
+spec:
+  entrypoint: main
+  arguments: 
+    parameters:
+      - name: image-name
+        value: wesmsl/argocli
+      - name: tag
+        value: v1.0.0
+  templates:
+    - name: main
+      steps:
+        - - name: tag-and-push
+            template: tag-and-push
+            arguments:
+              parameters:
+                - name: image-name
+                  value: "{{workflow.parameters.image-name}}"
+                - name: tag
+                  value: "{{workflow.parameters.tag}}"
+
+    - name: tag-and-push
+      inputs:
+        parameters:
+          - name: image-name
+          - name: tag
+      container:
+        image: docker:20.10
+        command: [sh, -c]
+        args:
+          - |
+            echo "Logging into Docker Hub"
+            echo $DOCKER_CONFIG_JSON > /.docker/config.json
+            docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+            echo "Tagging and pushing image"
+            docker tag {{inputs.parameters.image-name}}:latest {{inputs.parameters.image-name}}:{{inputs.parameters.tag}}
+            docker push {{inputs.parameters.image-name}}:{{inputs.parameters.tag}}
+        env:
+          - name: DOCKER_CONFIG
+            value: /.docker
+        volumeMounts:
+          - name: docker-socket
+            mountPath: /var/run/docker.sock
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+
+  
