@@ -6,7 +6,7 @@ metadata:
   namespace: argo-events
 spec:
   event:
-    selector: payload.repo != "" && payload.branch != ""
+    selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != ""
   submit:
     workflowTemplateRef:
       name: buildkit
@@ -18,6 +18,12 @@ spec:
         - name: branch
           valueFrom:
             event: payload.ref
+        - name: name
+          valueFrom:
+            event: payload.pusher.name
+        - name: email
+          valueFrom:
+            event: payload.pusher.email
 EOF
 
 kubectl apply -f - <<EOF

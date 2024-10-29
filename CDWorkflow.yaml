@@ -2,59 +2,46 @@ metadata:
   name: cd-workflow
   namespace: argo
 spec:
-  entrypoint: main
-  serviceAccountName: argo-workflow-sa
-  volumeClaimTemplates:
-    - metadata:
-        name: work
-        creationTimestamp: null
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: 5Gi
-      status: {}
-  arguments:
-    parameters:
-      - name: repo
-        value: https://github.com/konjo-open-src/argo-workflows
-      - name: branch
-        value: refs/heads/main
-      - name: path
-        value: argo-workflows
-      - name: cli-image
-        value: wesmsl/argocli:v1
-      - name: exec-image
-        value: quay.io/argoproj/argoexec:latest
-      - name: tag
-        value: v1.0.0
   templates:
     - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
       steps:
         - - name: clone-repo
-        template: clone-repo
-        arguments:
-          parameters:
-            - name: repo
-              value: '{{workflow.parameters.repo}}'
-            - name: branch
-              value: '{{workflow.parameters.branch}}'
-    - - name: update-manifests
-        template: update-manifests
-        arguments:
-          parameters:
-            - name: image-name
-              value: '{{workflow.parameters.image-name}}'
-            - name: image-tag
-              value: '{{workflow.parameters.image-tag}}'
-    - - name: commit-manifests
-        template: commit-manifests
-        arguments:
-          parameters:
-            - name: commit-message
-              value: 'Update image to {{workflow.parameters.image-tag}}'
-
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+        - - name: docker-tag-push
+            template: docker-tag-push
+            arguments:
+              parameters:
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+        - - name: update-manifests
+            template: update-manifests
+            arguments:
+              parameters:
+                - name: image-name
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: image-tag
+                  value: '{{workflow.parameters.tag}}'
+        - - name: commit-manifests
+            template: commit-manifests
+            arguments:
+              parameters:
+                - name: commit-message
+                  value: Update image to {{workflow.parameters.tag}}
+                - name: name
+                  value: '{{workflow.parameters.name}}'
+                - name: email
+                  value: '{{workflow.parameters.email}}'
     - name: clone-repo
       inputs:
         parameters:
@@ -82,51 +69,210 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
+    - name: docker-tag-push
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
 
+            apt-get update
 
+            # Install dependencies
 
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo
+
+            # Download and configure Docker
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            # Wait for Docker 
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            # Pull the CLI and exec images
+
+            echo "Pulling the CLI and exec images..."
+
+            docker pull
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker pull {{inputs.parameters.exec-image}}
+
+            # Tag and push images to docker hub
+
+            echo "Tagging and pushing the images to Docker Hub..."
+
+            docker images
+
+            docker tag {{inputs.parameters.cli-image}}
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker push
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
     - name: update-manifests
       inputs:
         parameters:
           - name: image-name
           - name: image-tag
+      outputs: {}
+      metadata: {}
       container:
-        image: k8s.gcr.io/kustomize/kustomize:v3.8.7
-        command: [sh, -c]
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
         args:
-          - |
-            cd /work/manifests/base
-            kustomize edit set image {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
+          - >
+            apt-get update && apt-get install -y curl
+
+            curl -s
+            "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
+            | bash
+
+            mv kustomize /usr/local/bin/
+
+            kustomize version
+
+            cd manifests/base
+
+            kustomize edit set image
+            {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
 
             # Ensure the kustomization.yaml is updated
+
             kustomize build .
 
             # Output the updated kustomization.yaml
+
             cat kustomization.yaml
         workingDir: /work
+        resources: {}
         volumeMounts:
           - name: work
             mountPath: /work
-
     - name: commit-manifests
       inputs:
         parameters:
           - name: commit-message
+          - name: name
+          - name: email
+      outputs: {}
+      metadata: {}
       container:
+        name: ''
         image: alpine/git:v2.26.2
-        command: [sh, -c]
+        command:
+          - sh
+          - '-c'
         args:
-          - |
-            git remote rm origin
-            git remote add origin {{workflow.parameters.repo}}
-            git config --global user.email "128409641+wesleyscholl@users.noreply.github.com"
-            git config --global user.name "Wesley Scholl"
-            git add -A
-            git commit -m "{{inputs.parameters.commit-message}}"
-            git push origin HEAD:{{workflow.parameters.branch}}
+          - >
+            git config --global user.email "{{inputs.parameters.email}}"
+
+            git config --global user.name "{{inputs.parameters.name}}"
+
+            git add -A 
+
+            git commit -m "{{inputs.parameters.commit-message}}" 
+
+            git push
+            https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git
+            HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
         workingDir: /work
+        env:
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-token
+                key: token
+        resources: {}
         volumeMounts:
           - name: work
             mountPath: /work
-
-  
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: name
+        value: wesleyscholl
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com
+      - name: path
+        value: argo-workflows
+      - name: cli-image
+        value: wesmsl/argocli
+      - name: exec-image
+        value: quay.io/argoproj/argoexec:latest
+      - name: tag
+        value: v1
+  serviceAccountName: argo-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+      status: {}

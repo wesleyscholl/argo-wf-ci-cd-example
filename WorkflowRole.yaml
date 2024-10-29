@@ -106,6 +106,59 @@ subjects:
   namespace: argo
 EOF
 ---
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-server-configmap-reader
+  namespace: argo-workflows
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-server-configmap-reader-binding
+  namespace: argo-workflows
+subjects:
+- kind: ServiceAccount
+  name: argo-server
+  namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-server-configmap-reader
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-controller-configmap
+  namespace: argo-workflows
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-controller-configmap
+  namespace: argo-workflows
+subjects:
+- kind: ServiceAccount
+  name: argo
+  namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-controller-configmap
+  apiGroup: rbac.authorization.k8s.io
+EOF
 
 # ClusterRoleBinding binding for the service account above
 

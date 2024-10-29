@@ -48,6 +48,12 @@ spec:
         - name: branch
           valueFrom:
             event: payload.ref # GitHub ref branch
+        - name: name
+          valueFrom:
+            event: payload.pusher.name # GitHub user name
+        - name: email
+          valueFrom:
+            event: payload.pusher.email # GitHub user email
 ```
 
 
@@ -112,6 +118,8 @@ spec:
                   parameters:
                     - name: repo # Parameters to pass to pass to the WorkflowTemplate
                     - name: branch
+                    - name: name
+                    - name: email
                 workflowTemplateRef:
                   name: ci-workflow # Name of the WorkflowTemplate
           operation: create # Creates the workflow when triggered
@@ -124,6 +132,14 @@ spec:
                 dependencyName: test-dep
                 dataKey: body.ref
               dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: test-dep
+                dataKey: body.pusher.name
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: test-dep
+                dataKey: body.pusher.email
+              dest: spec.arguments.parameters.3.value
   template:
     serviceAccountName: operate-workflow-sa # Service account to use - Required to submit workflows
 ```
@@ -134,6 +150,126 @@ Both configurations can be tested using a curl command:
 
 ```bash
 curl -d '{"message":"Trigger CI/CD"}' -H "Content-Type: application/json" -X POST http://<Deployed-Argo-Application-Url>:12000/example 
+```
+
+## Base Workflow Manifest
+
+```yaml
+metadata:
+  name: ci-workflow
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+          - name: build-executor
+            template: build-executor
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: clone-repo
+          - name: build-cli
+            template: build-cli
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: build-executor
+          - name: create-exec-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.exec-image}}'
+            depends: build-cli
+          - name: create-cli-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.cli-image}}'
+            depends: create-exec-image
+          - name: run-tests
+            template: run-tests
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: create-cli-image
+          - name: run-coverage
+            template: run-coverage
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: run-tests
+          - name: deploy
+            template: deploy
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+            depends: run-coverage
+          - name: run-e2e-tests
+            template: run-e2e-tests
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+            depends: deploy
+#...
+#### Workflow Templates ####           
+#...
+entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: name # Passed to the CD workflow
+        value: wesleyscholl
+      - name: email # Passed to the CD workflow
+        value: 128409641+wesleyscholl@users.noreply.github.com
+      - name: path
+        value: argo-workflows
+      - name: cli-image
+        value: wesmsl/argocli:v1
+      - name: exec-image
+        value: wesmsl/argoexec:v1
+  serviceAccountName: operate-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 64Mi
+      status: {}
 ```
 
 ## Cloning and Building the Argo CLI
