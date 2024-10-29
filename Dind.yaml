@@ -160,6 +160,50 @@ spec:
 
             kustomize version
 
+            # Install argocd
+
+            echo "Installing Argo CD..."
+
+            kubectl create namespace argocd
+
+            kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+            # Wait for Argo CD to be ready
+
+            echo "Waiting for Argo CD to be ready..."
+
+            until kubectl get pods -n argocd | grep -q 'Running'; do sleep 3; done
+
+            # Install Argo CD CLI
+
+            echo "Installing Argo CD CLI..."
+
+            curl -sSL -o /usr/local/bin/argocd
+
+            # Log in to Argo CD
+
+            echo "Logging in to Argo CD..."
+
+            argocd login localhost:2746 --username admin --password admin --insecure
+
+            # Create an Argo CD application
+
+            echo "Creating an Argo CD application..."
+
+            argocd app create cd-workflow --repo {{inputs.parameters.repo}} --path /apps --dest-server https://kubernetes.default.svc --dest-namespace argo --sync-policy automated --auto-prune
+
+            # Wait for the Argo CD application to be ready
+
+            echo "Waiting for the Argo CD application to be ready..."
+
+            until argocd app list | grep -q 'Synced'; do sleep 3; done
+
+            # Log out of Argo CD
+
+            echo "Logging out of Argo CD..."
+
+            argocd logout
+
             # Download and configure Docker
 
             echo "Downloading and configuring Docker..."
@@ -216,6 +260,26 @@ spec:
             docker pull {{inputs.parameters.cli-image}}
 
             docker images
+
+            docker tag {{inputs.parameters.cli-image}}
+            {{inputs.parameters.cli-image}}
+
+            docker push {{inputs.parameters.cli-image}}
+
+            cd manifests 
+
+            # Update deployment manifests using kustomize edit set image
+
+            echo "Updating the images using kustomize..."
+
+            kustomize edit set image
+            argoproj/argocli:latest=wesmsl/argocli:latest
+
+            # Verify kustomize changes
+
+            echo "Verifying kustomize changes..."
+
+            kustomize build .
 
             # Create k3d cluster
 
@@ -372,25 +436,7 @@ spec:
 
             git push
 
-            # Install argocd
-
-            echo "Installing Argo CD..."
-
-            kubectl create namespace argocd
-
-            kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
-            # Wait for Argo CD to be ready
-
-            echo "Waiting for Argo CD to be ready..."
-
-            until kubectl get pods -n argocd | grep -q 'Running'; do sleep 3; done
-
-            # Log in to Argo CD
-
-            echo "Logging in to Argo CD..."
-
-            argocd login localhost:2746 --username admin --password admin --insecure
+            
 
 
 

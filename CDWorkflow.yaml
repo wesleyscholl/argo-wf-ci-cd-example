@@ -3,51 +3,121 @@ metadata:
   namespace: argo
 spec:
   entrypoint: main
-  arguments: 
+  serviceAccountName: argo-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+      status: {}
+  arguments:
     parameters:
-      - name: image-name
-        value: wesmsl/argocli
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: path
+        value: argo-workflows
+      - name: cli-image
+        value: wesmsl/argocli:v1
+      - name: exec-image
+        value: quay.io/argoproj/argoexec:latest
       - name: tag
         value: v1.0.0
   templates:
     - name: main
       steps:
-        - - name: tag-and-push
-            template: tag-and-push
-            arguments:
-              parameters:
-                - name: image-name
-                  value: "{{workflow.parameters.image-name}}"
-                - name: tag
-                  value: "{{workflow.parameters.tag}}"
+        - - name: clone-repo
+        template: clone-repo
+        arguments:
+          parameters:
+            - name: repo
+              value: '{{workflow.parameters.repo}}'
+            - name: branch
+              value: '{{workflow.parameters.branch}}'
+    - - name: update-manifests
+        template: update-manifests
+        arguments:
+          parameters:
+            - name: image-name
+              value: '{{workflow.parameters.image-name}}'
+            - name: image-tag
+              value: '{{workflow.parameters.image-tag}}'
+    - - name: commit-manifests
+        template: commit-manifests
+        arguments:
+          parameters:
+            - name: commit-message
+              value: 'Update image to {{workflow.parameters.image-tag}}'
 
-    - name: tag-and-push
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1'
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}'
+          - .
+        workingDir: /work
+        resources:
+          requests:
+            cpu: '1'
+            memory: 2Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+
+    - name: update-manifests
       inputs:
         parameters:
           - name: image-name
-          - name: tag
+          - name: image-tag
       container:
-        image: docker:20.10
+        image: k8s.gcr.io/kustomize/kustomize:v3.8.7
         command: [sh, -c]
         args:
           - |
-            echo "Logging into Docker Hub"
-            echo $DOCKER_CONFIG_JSON > /.docker/config.json
-            docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
-            echo "Tagging and pushing image"
-            docker tag {{inputs.parameters.image-name}}:latest {{inputs.parameters.image-name}}:{{inputs.parameters.tag}}
-            docker push {{inputs.parameters.image-name}}:{{inputs.parameters.tag}}
-        env:
-          - name: DOCKER_CONFIG
-            value: /.docker
+            cd /work/manifests/base
+            kustomize edit set image {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
+        workingDir: /work
         volumeMounts:
-          - name: docker-socket
-            mountPath: /var/run/docker.sock
-          - name: docker-config
-            mountPath: /.docker
-      volumes:
-        - name: docker-config
-          secret:
-            secretName: docker-config
+          - name: work
+            mountPath: /work
+
+    - name: commit-manifests
+      inputs:
+        parameters:
+          - name: commit-message
+      container:
+        image: alpine/git:v2.26.2
+        command: [sh, -c]
+        args:
+          - |
+            cd /work
+            git config --global user.email "ci@example.com"
+            git config --global user.name "CI Bot"
+            git add manifests/base/kustomization.yaml
+            git commit -m "{{inputs.parameters.commit-message}}"
+            git push origin HEAD:{{workflow.parameters.branch}}
+        workingDir: /work
+        volumeMounts:
+          - name: work
+            mountPath: /work
 
   
