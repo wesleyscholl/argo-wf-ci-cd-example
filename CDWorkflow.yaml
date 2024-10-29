@@ -83,6 +83,8 @@ spec:
           - name: work
             mountPath: /work
 
+
+
     - name: update-manifests
       inputs:
         parameters:
@@ -95,6 +97,12 @@ spec:
           - |
             cd /work/manifests/base
             kustomize edit set image {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
+
+            # Ensure the kustomization.yaml is updated
+            kustomize build .
+
+            # Output the updated kustomization.yaml
+            cat kustomization.yaml
         workingDir: /work
         volumeMounts:
           - name: work
@@ -109,10 +117,11 @@ spec:
         command: [sh, -c]
         args:
           - |
-            cd /work
-            git config --global user.email "ci@example.com"
-            git config --global user.name "CI Bot"
-            git add manifests/base/kustomization.yaml
+            git remote rm origin
+            git remote add origin {{workflow.parameters.repo}}
+            git config --global user.email "128409641+wesleyscholl@users.noreply.github.com"
+            git config --global user.name "Wesley Scholl"
+            git add -A
             git commit -m "{{inputs.parameters.commit-message}}"
             git push origin HEAD:{{workflow.parameters.branch}}
         workingDir: /work

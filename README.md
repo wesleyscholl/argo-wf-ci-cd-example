@@ -570,3 +570,42 @@ kubectl create secret generic docker-config --from-literal="config.json={\"auths
             privileged: true # Required
           mirrorVolumeMounts: true
 ```
+
+
+
+## GitHub PAT commit/push secret configuration
+
+A GitHub Personal Access Token is required to add, commit and push the new Kustomize image tags to the remote repo.
+
+```bash
+kubectl create secret generic github-token --from-literal=token=<Your_GitHub_PAT> -n argo
+```
+
+Then pass the token as an environment variable:
+
+```yaml
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            # Add git email and name
+            git config --global user.email "128409641+wesleyscholl@users.noreply.github.com" 
+            git config --global user.name "Wesley Scholl" 
+            # Stage all files
+            git add -A 
+            # Commit staged files with commit-message parameter
+            git commit -m "{{inputs.parameters.commit-message}}" 
+            # Push to remote using GITHUB_TOKEN, repo and branch
+            git push https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}} 
+        workingDir: /work
+        env:
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-token
+                key: token
+```
