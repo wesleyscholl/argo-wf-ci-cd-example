@@ -1,24 +1,6 @@
 metadata:
   name: deploy-workflow
   namespace: argo
-  uid: 409e1a1f-3d1b-43aa-89f2-b7e1b038dcab
-  resourceVersion: '88391'
-  generation: 28
-  creationTimestamp: '2024-10-28T13:49:05Z'
-  labels:
-    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
-  managedFields:
-    - manager: argo
-      operation: Update
-      apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-30T20:13:43Z'
-      fieldsType: FieldsV1
-      fieldsV1:
-        f:metadata:
-          f:labels:
-            .: {}
-            f:workflows.argoproj.io/creator: {}
-        f:spec: {}
 spec:
   templates:
     - name: main
