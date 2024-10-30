@@ -1,17 +1,17 @@
 metadata:
-  name: a-k8s-cluster-create
-  namespace: argo-events
-  uid: be3af12d-46f8-4cd3-a367-9bfe13a80d82
-  resourceVersion: '2907755'
-  generation: 27
-  creationTimestamp: '2024-10-21T22:47:20Z'
+  name: deploy-workflow
+  namespace: argo
+  uid: 409e1a1f-3d1b-43aa-89f2-b7e1b038dcab
+  resourceVersion: '88391'
+  generation: 28
+  creationTimestamp: '2024-10-28T13:49:05Z'
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
   managedFields:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-22T15:44:02Z'
+      time: '2024-10-30T20:13:43Z'
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -21,174 +21,340 @@ metadata:
         f:spec: {}
 spec:
   templates:
-    - name: create-and-interact
+    - name: main
       inputs: {}
       outputs: {}
       metadata: {}
       steps:
-        - - name: create-cluster
-            template: k3d-create-cluster
+        - - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+        - - name: prepare-deploy-to-cluster
+            template: prepare-deploy-to-cluster
+            arguments:
+              parameters:
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+        - - name: approval
+            template: approval
             arguments: {}
-    - name: k3d-create-cluster
-      inputs: {}
+        - - name: cd-workflow
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+                - name: name
+                  value: '{{workflow.parameters.name}}'
+                - name: email
+                  value: '{{workflow.parameters.email}}'
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+                - name: tag
+                  value: '{{workflow.parameters.tag}}'
+            templateRef:
+              name: cd-workflow
+              template: main
+            when: '{{steps.approval.outputs.parameters.approve}} == YES'
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1'
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}'
+          - .
+        workingDir: /work
+        resources:
+          requests:
+            cpu: '1'
+            memory: 2Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: approval
+      inputs:
+        parameters:
+          - name: approve
+            default: 'NO'
+            enum:
+              - 'YES'
+              - 'NO'
+            description: Choose YES to continue workflow and deploy to production
+      outputs:
+        parameters:
+          - name: approve
+            valueFrom:
+              supplied: {}
+      metadata: {}
+      suspend: {}
+    - name: prepare-deploy-to-cluster
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
       outputs: {}
       metadata: {}
       container:
         name: ''
         image: ubuntu:latest
         command:
-          - /bin/sh
+          - sh
           - '-c'
         args:
           - >
-            apt-get update
-
-
             DEBIAN_FRONTEND=noninteractive 
 
+            apt-get update
 
-            apt-get install -y curl sudo systemd systemd-sysv dbus udev procps
-            cgroup-lite cgroup-tools
+            # Install dependencies
 
+            echo "Installing dependencies..."
 
-            cd /
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo golang make socat git
 
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
 
-            mount -t proc proc /proc
+            sudo apt-get install -y lsof
 
+            # Test make command
 
-            mount -t sysfs sys /sys
+            make --version
 
+            # Install k3d
 
-            mount -t tmpfs tmp /tmp
+            echo "Installing k3d..."
 
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
 
-            mkdir -p /run/systemd
+            # Install kubectl
 
+            echo "Installing kubectl..."
 
-            mount -t tmpfs run /run
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 
+            chmod +x kubectl
 
-            mkdir -p /run/lock
+            mv kubectl /usr/local/bin/
 
+            kubectl version --client
 
-            curl -sSLf https://get.k0s.sh | sudo sh
+            # Install Kustomize
 
+            curl -s
+            "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
+            | bash
 
-            k0s install controller --single --enable-worker --no-taints
+            mv kustomize /usr/local/bin/
 
+            kustomize version
 
-            mkdir -p /etc/k0s
+            # Download and configure Docker
 
+            echo "Downloading and configuring Docker..."
 
-            cat > /etc/k0s/k0s.yaml <<EOF
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
-            apiVersion: k0s.k0sproject.io/v1beta1
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-            kind: ClusterConfig
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
 
-            metadata:
-              name: k0s
-            spec:
-              api:
-                extraArgs:
-                  anonymous-auth: "true"
-              storage:
-                type: etcd
-              network:
-                provider: calico
-              controllerManager: {}
-              scheduler: {}
-              extensions:
-                helm:
-                  repositories:
-                  - name: stable
-                    url: https://charts.helm.sh/stable
-              workloadRuntime:
-                containerd:
-                  configPath: /etc/k0s/containerd.toml
-            EOF
+            # Wait for Docker 
 
+            echo "Waiting for Docker daemon to be ready..."
 
-            mkdir -p /etc/k0s
+            until docker info; do sleep 3; done
 
+            echo "Docker daemon is ready. Running commands..."
 
-            cat > /etc/k0s/containerd.toml <<EOF
+            # Pull the images from docker hub
 
-            version = 2
+            echo "Pulling images from docker hub..."
 
-            root = "/var/lib/k0s/containerd"
+            docker pull {{inputs.parameters.exec-image}}
 
-            state = "/run/k0s/containerd"
+            docker pull {{inputs.parameters.cli-image}}
 
+            docker images
 
-            [grpc]
-              address = "/run/k0s/containerd.sock"
+            # Create k3d cluster
 
-            [plugins."io.containerd.grpc.v1.cri"]
-              enable_selinux = false
-              sandbox_image = "k8s.gcr.io/pause:3.7"
-            EOF
+            echo "Creating k3d cluster..."
 
+            k3d cluster create argocluster --kubeconfig-switch-context
 
-            k0s start
+            # Wait for k3d cluster to be ready
 
+            echo "Waiting for k3d cluster to be ready..."
 
-            timeout=300
+            until kubectl cluster-info; do sleep 3; done
 
+            echo "k3d is ready. Running commands..."
 
-            echo "Waiting for k0s API server to be ready (timeout:
-            ${timeout}s)..."
+            # Merge kubeconfig - set context to k3d cluster
 
+            echo "Merging kubeconfig and switching context to k3d cluster..."
 
-            start_time=$(date +%s)
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context
 
+            kubectl cluster-info
 
-            while true; do
-              if k0s status 2>/dev/null; then
-                echo "k0s API server is ready"
-                break
-              fi
-              
-              current_time=$(date +%s)
+            kubectl version
 
-              elapsed=$((current_time - start_time))
+            # Load the images into the k3d cluster
 
-              if [ $elapsed -ge $timeout ]; then
-                echo "Timeout waiting for k0s API server"
-                exit 1
-              fi
-              
-              echo "Still waiting... (${elapsed}s elapsed)"
-              sleep 5
-            done
+            echo "Loading images into k3d cluster..."
 
+            docker save {{inputs.parameters.exec-image}} -o /tmp/argoexec.tar
 
-            echo "Waiting for node to be ready..."
+            docker save {{inputs.parameters.cli-image}} -o /tmp/argocli.tar
 
-            until k0s kubectl get nodes | grep -q " Ready"; do
-              sleep 5
-            done
+            docker load < /tmp/argoexec.tar
 
+            docker load < /tmp/argocli.tar
 
-            k0s kubectl get nodes
+            # Set up the hosts file
 
+            echo "Setting up the hosts file..."
 
-            k0s kubectl get pods -A
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            # Install manifests
+
+            echo "Installing manifests..."
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Ensure that pods are running
+
+            echo "Checking that pods are running..."
+
+            kubectl get pods -n argo
+
+            # Build argo workflow CLI
+
+            echo "Building argo workflow CLI..."
+
+            make cli STATIC_FILES=false
+
+            # Start argo workflow controller & API
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
+            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true >
+            /tmp/argo.log 2>&1 &
+
+            # Wait for argo workflow controller to be ready
+
+            make wait PROFILE=mysql API=true  
+
+            # Run E2E tests for CLI
+
+            echo "Running E2E tests for CLI..."
+
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+        workingDir: /work/
+        env: # env to connect to the docker sidecar
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources: # Adjust as needed
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes: # Shared volume
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars: # Docker dind sidecar
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true # Required to run Docker in Docker
+          mirrorVolumeMounts: true
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows
+      - name: branch
+        value: refs/heads/main
+      - name: name
+        value: wesleyscholl
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com
+      - name: path
+        value: argo-workflows
+      - name: cli-image
+        value: wesmsl/argocli
+      - name: exec-image
+        value: quay.io/argoproj/argoexec:latest
+      - name: tag
+        value: v1
+  serviceAccountName: argo-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
         resources:
           requests:
-            cpu: '2'
-            memory: 4Gi
-        volumeMounts:
-          - name: systemd
-            readOnly: true
-            mountPath: /sys/fs/cgroup
-          - name: dbus
-            mountPath: /var/run/dbus
-        securityContext:
-          privileged: true
-          runAsUser: 0
-  entrypoint: create-and-interact
-  arguments: {}
-
-
+            storage: 5Gi
+      status: {}

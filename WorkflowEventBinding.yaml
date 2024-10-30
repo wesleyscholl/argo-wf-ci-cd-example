@@ -1,4 +1,3 @@
-kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowEventBinding
 metadata:
@@ -6,49 +5,21 @@ metadata:
   namespace: argo-events
 spec:
   event:
-    selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != ""
+    selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != "" # To evaluate properties and values within the payload
   submit:
     workflowTemplateRef:
-      name: buildkit
+      name: buildkit # Name of the WorkflowTemplate to trigger
     arguments:
-      parameters:
+      parameters: # Parameters to pass to the WorkflowTemplate
         - name: repo
           valueFrom:
-            event: payload.repository.html_url
+            event: payload.repository.html_url # GitHub url
         - name: branch
           valueFrom:
-            event: payload.ref
+            event: payload.ref # GitHub ref branch
         - name: name
           valueFrom:
-            event: payload.pusher.name
+            event: payload.pusher.name # GitHub user name
         - name: email
           valueFrom:
-            event: payload.pusher.email
-EOF
-
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: submit-workflow-template
-  namespace: argo-events
-rules:
-  - apiGroups:
-      - argoproj.io
-    resources:
-      - workfloweventbindings
-    verbs:
-      - list
-  - apiGroups:
-      - argoproj.io
-    resources:
-      - workflowtemplates
-    verbs:
-      - get
-  - apiGroups:
-      - argoproj.io
-    resources:
-      - workflows
-    verbs:
-      - create
-EOF
+            event: payload.pusher.email # GitHub user email

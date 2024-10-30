@@ -1,0 +1,46 @@
+# ArgoCD Secret - server, username, password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-env-secret # Name of secret
+  namespace: argo # namespace
+type: Opaque
+stringData:
+  server: <ArgoCD-Server-Deployment-Url> # Deployment URL
+  username: admin # Admin username
+  password: abc..........xyz # Admin password          
+---
+# NetworkPolicy for ArgoCD - Connects argo and argocd namespaces via Ingress for argocd-server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-sync # Name of the NetworkPolicy
+  namespace: argocd # Apply the NetworkPolicy to the ArgoCD namespace
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server # Select the ArgoCD server pod
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: argo # Allow traffic from the Argo namespace
+  policyTypes:
+  - Ingress # Only allow ingress traffic
+---
+# ArgoCD Service - Creates a service for the ArgoCD server to be accessed by the ArgoCD CLI
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-server # Name of the service
+  namespace: argocd # Apply the service to the argocd namespace
+spec:
+  ports:
+  - name: http # Name of the port
+    port: 80 # Port to expose
+    targetPort: 8080 # Port to forward traffic to
+  - name: https # Name of the port
+    port: 443 # Port to expose
+    targetPort: 8080 # Port to forward traffic to
+  selector:
+    app.kubernetes.io/name: argocd-server # Select the ArgoCD server pod

@@ -1,15 +1,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: EventSource
 metadata:
-  name: webhook
-  namespace: argo-events
+  name: webhook 
+  namespace: argo-events 
 spec:
-  service:
+  service: 
     ports:
-      - port: 12000
-        targetPort: 12000
+      - port: 12000 # Configuring the service port to 12000
+        targetPort: 12000 # Configuring the service target port to 12000
   webhook:
-    example:
-      endpoint: /example
-      method: POST
-      port: "12000"
+    example: # Name of webhook event
+      endpoint: /example # Endpoint url suffix
+      method: POST # HTTP Method - POST to send request data 
+      port: "12000" # Assigning the port for the webhook

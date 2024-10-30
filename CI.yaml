@@ -130,9 +130,9 @@ spec:
           - '--depth'
           - '1'
           - '--branch'
-          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch 
           - '--single-branch'
-          - '{{inputs.parameters.repo}}'
+          - '{{inputs.parameters.repo}}' # https://github.com/argoproj/argo-workflows
           - .
         workingDir: /work
         resources:
@@ -155,16 +155,16 @@ spec:
           - /bin/sh
           - '-c'
         args:
-          - '{{inputs.parameters.commands}}'
+          - '{{inputs.parameters.commands}}' # Parameterized commands
         workingDir: /work/
         env:
           - name: GO111MODULE
             value: 'on'
-        resources:
+        resources: # Adjust resources as needed
           requests:
             cpu: '2'
             memory: 4Gi
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
     - name: create-image
@@ -188,22 +188,22 @@ spec:
           - '--local'
           - dockerfile=.
           - '--output'
-          - type=image,name=docker.io/{{inputs.parameters.image}},push=true
+          - type=image,name=docker.io/{{inputs.parameters.image}},push=true # Creates an image and pushes
         workingDir: /work/
         env:
           - name: BUILDKITD_FLAGS
             value: '--oci-worker-no-process-sandbox'
-          - name: DOCKER_CONFIG
+          - name: DOCKER_CONFIG # Pass in the docker config as an environment variable
             value: /.docker
-        resources:
+        resources: # Adjust as needed
           requests:
-            cpu: '2'
-            memory: 4Gi
+            cpu: '3'
+            memory: 6Gi
         volumeMounts:
-          - name: work
+          - name: work # Shared volume
             mountPath: /work
-          - name: docker-config
-            mountPath: /.docker
+          - name: docker-config # Ensure to mount this volume
+            mountPath: /.docker # Using this mount path
         readinessProbe:
           exec:
             command:
@@ -211,9 +211,9 @@ spec:
               - '-c'
               - buildctl debug workers
       volumes:
-        - name: docker-config
+        - name: docker-config # Ensure this volume is configured
           secret:
-            secretName: docker-config
+            secretName: docker-config # This secret holds the API key to your Docker registry
   entrypoint: main
   arguments:
     parameters:

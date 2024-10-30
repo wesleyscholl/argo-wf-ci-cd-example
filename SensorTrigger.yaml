@@ -2,34 +2,48 @@ apiVersion: argoproj.io/v1alpha1
 kind: Sensor
 metadata:
   name: webhook
-  namespace: argo-events
+  namespace: argo-events # Ensure namespaces match
 spec:
   dependencies:
-    - name: test-dep
-      eventSourceName: webhook
-      eventName: example
+    - name: test-dep # Dependency for the sensor
+      eventSourceName: webhook # Event Source
+      eventName: example # Name of the webhook event
   triggers:
     - template:
-        name: webhook-workflow-trigger
+        name: webhook-workflow-trigger # Trigger Name
         k8s:
           source:
-            resource:
+            resource: # Specifying the resource
               apiVersion: argoproj.io/v1alpha1
               kind: Workflow
               metadata:
-                generateName: ci-cd-build-
+                generateName: ci-workflow-
               spec:
                 arguments:
                   parameters:
-                    - name: message
-                      value: test
+                    - name: repo # Parameters to pass to pass to the WorkflowTemplate
+                    - name: branch
+                    - name: name
+                    - name: email
                 workflowTemplateRef:
-                  name: ci-cd-build
-          operation: create
+                  name: ci-workflow # Name of the WorkflowTemplate
+          operation: create # Creates the workflow when triggered
           parameters:
             - src:
+                dependencyName: test-dep # Dependency name
+                dataKey: body.repository.html_url # Selector for request body data (Repo url)
+              dest: spec.arguments.parameters.0.value # Destination for data selection
+            - src:
                 dependencyName: test-dep
-                dataKey: body
-              dest: spec.arguments.parameters.0.value
+                dataKey: body.ref # (Branch)
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: test-dep
+                dataKey: body.pusher.name # (User name)
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: test-dep
+                dataKey: body.pusher.email # (User email)
+              dest: spec.arguments.parameters.3.value
   template:
-    serviceAccountName: operate-workflow-sa
+    serviceAccountName: operate-workflow-sa # Service account to use - Required to create workflows
