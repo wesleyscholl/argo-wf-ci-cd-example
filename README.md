@@ -1,18 +1,31 @@
 # Argo Workflows - CI/CD Example
 
-
 ## Table of Contents
 
+ ### [Configuration](#configuration-1)
 - [GitHub Webhooks Configuration](#gitHub-webhooks-configuration)
 - [Two methods to trigger workflows using webhooks](#two-methods-to-trigger-workflows-using-webhooks)
   - [`WorkflowEventBinding`](#workfloweventbinding) 
   - [Argo Events](#argo-events)
 - [Testing the configuration](#testing-the-configuration)
+
+### [CI](#ci-1)
 - [Cloning and Building the Argo CLI](#cloning-and-building-the-argo-cli)
 - [Creating a build images and pushing to docker hub image registry](#creating-a-build-images-and-pushing-to-docker-hub-image-registry)
 - [Running unit tests, coverage and collect test reports](#running-unit-tests-coverage-and-collect-test-reports)
+- [Create cluster and deploy](#create-cluster-and-deploy)
 
+### [CD](#cd-1)
+- [Tag and push tag](#tag-and-push-tag)
+- [Update deployment manifests using `kustomize edit set image`](#update-deployment-manifests-using-kustomize-edit-set-image)
+- [Commit deployment manifests](#commit-deployment-manifests)
+- [GitHub PAT commit/push secret configuration](#github-pat-commitpush-secret-configuration)
+- [ArgoCD Configuration](#argocd-configuration)
+- [Start Argo CD sync step](#start-argo-cd-sync-step)
 
+<br>
+
+# Configuration
 
 ## GitHub Webhooks Configuration
 
@@ -126,19 +139,19 @@ spec:
           parameters:
             - src:
                 dependencyName: test-dep # Dependency name
-                dataKey: body.repository.html_url # Selector for request body data
+                dataKey: body.repository.html_url # Selector for request body data (Repo url)
               dest: spec.arguments.parameters.0.value # Destination for data selection
             - src:
                 dependencyName: test-dep
-                dataKey: body.ref
+                dataKey: body.ref # (Branch)
               dest: spec.arguments.parameters.1.value
             - src:
                 dependencyName: test-dep
-                dataKey: body.pusher.name
+                dataKey: body.pusher.name # (User name)
               dest: spec.arguments.parameters.2.value
             - src:
                 dependencyName: test-dep
-                dataKey: body.pusher.email
+                dataKey: body.pusher.email # (User email)
               dest: spec.arguments.parameters.3.value
   template:
     serviceAccountName: operate-workflow-sa # Service account to use - Required to submit workflows
@@ -152,125 +165,7 @@ Both configurations can be tested using a curl command:
 curl -d '{"message":"Trigger CI/CD"}' -H "Content-Type: application/json" -X POST http://<Deployed-Argo-Application-Url>:12000/example 
 ```
 
-## Base Workflow Manifest
-
-```yaml
-metadata:
-  name: ci-workflow
-  namespace: argo
-spec:
-  templates:
-    - name: main
-      inputs: {}
-      outputs: {}
-      metadata: {}
-      dag:
-        tasks:
-          - name: clone-repo
-            template: clone-repo
-            arguments:
-              parameters:
-                - name: repo
-                  value: '{{workflow.parameters.repo}}'
-                - name: branch
-                  value: '{{workflow.parameters.branch}}'
-          - name: build-executor
-            template: build-executor
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: clone-repo
-          - name: build-cli
-            template: build-cli
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: build-executor
-          - name: create-exec-image
-            template: create-image
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.exec-image}}'
-            depends: build-cli
-          - name: create-cli-image
-            template: create-image
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: image
-                  value: '{{workflow.parameters.cli-image}}'
-            depends: create-exec-image
-          - name: run-tests
-            template: run-tests
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: create-cli-image
-          - name: run-coverage
-            template: run-coverage
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: run-tests
-          - name: deploy
-            template: deploy
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: cli-image
-                  value: '{{workflow.parameters.cli-image}}'
-                - name: exec-image
-                  value: '{{workflow.parameters.exec-image}}'
-            depends: run-coverage
-          - name: run-e2e-tests
-            template: run-e2e-tests
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: deploy
-#...
-#### Workflow Templates ####           
-#...
-entrypoint: main
-  arguments:
-    parameters:
-      - name: repo
-        value: https://github.com/konjo-open-src/argo-workflows
-      - name: branch
-        value: refs/heads/main
-      - name: name # Passed to the CD workflow
-        value: wesleyscholl
-      - name: email # Passed to the CD workflow
-        value: 128409641+wesleyscholl@users.noreply.github.com
-      - name: path
-        value: argo-workflows
-      - name: cli-image
-        value: wesmsl/argocli:v1
-      - name: exec-image
-        value: wesmsl/argoexec:v1
-  serviceAccountName: operate-workflow-sa
-  volumeClaimTemplates:
-    - metadata:
-        name: work
-        creationTimestamp: null
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: 64Mi
-      status: {}
-```
+# CI
 
 ## Cloning and Building the Argo CLI
 
@@ -292,7 +187,7 @@ Within the CI workflow we start by cloning the Argo Workflows repo then build th
           - '--depth'
           - '1'
           - '--branch'
-          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/main' from the webhook payload to the 'main' branch 
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch 
           - '--single-branch'
           - '{{inputs.parameters.repo}}' # https://github.com/argoproj/argo-workflows
           - .
@@ -400,8 +295,9 @@ Within the CI workflow we start by cloning the Argo Workflows repo then build th
             secretName: docker-config # This secret holds the API key to your Docker registry
 ```
 
-Publishing docker images requires a personal access token. For Docker Hub you can create one at https://hub.docker.com/settings/security
-This needs to be mounted as a secret `$DOCKER_CONFIG/config.json`. To create a secret:
+> [!NOTE]  
+> Publishing docker images requires a personal access token. For Docker Hub you can create one at https://hub.docker.com/settings/security
+> This needs to be mounted as a secret `$DOCKER_CONFIG/config.json`. To create a secret:
 ```shell
 # Add this to your .bash_profile, .zshrc or shell configuration
 export DOCKER_USERNAME=****** 
@@ -480,7 +376,7 @@ kubectl create secret generic docker-config --from-literal="config.json={\"auths
             mountPath: /work
 ```
 
-## Deploying to a cluster
+## Create cluster and deploy
 
 ```yaml
     - name: prepare-deploy-to-cluster
@@ -707,6 +603,14 @@ kubectl create secret generic docker-config --from-literal="config.json={\"auths
           mirrorVolumeMounts: true
 ```
 
+# CD
+
+## Tag and push tag
+
+## Update deployment manifests using `kustomize edit set image`
+
+## Commit deployment manifests
+
 
 
 ## GitHub PAT commit/push secret configuration
@@ -745,3 +649,125 @@ Then pass the token as an environment variable:
                 name: github-token
                 key: token
 ```
+
+ ## ArgoCD Configuration
+
+ Configuration is required to connect to the ArgoCD server.
+
+ If you don't have ArgoCD installed, install it: https://argo-cd.readthedocs.io/en/latest/getting_started/
+
+ > NOTE
+ > This example is insecure, ensure the intial password is changed and setup additional security and auth. For more info: https://argo-cd.readthedocs.io/en/latest/operator-manual/security/ 
+
+Ensure to port forward the ArgoCD server and retrieve the admin login password.
+
+```shell
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+argocd admin initial-password -n argocd
+abc..........xyz
+
+This password must be only used for first time login. We strongly recommend you update the password using `argocd account update-password`.
+```
+
+## Start Argo CD sync step
+
+```yaml
+# ArgoCD Secret - server, username, password
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-env-secret # Name of secret
+  namespace: argo # namespace
+type: Opaque
+stringData:
+  server: <ArgoCD-Server-Deployment-Url> # Deployment URL
+  username: admin # Admin username
+  password: abc..........xyz # Admin password          
+---
+# NetworkPolicy for ArgoCD - Connects argo and argocd namespaces via Ingress for argocd-server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-sync # Name of the NetworkPolicy
+  namespace: argocd # Apply the NetworkPolicy to the ArgoCD namespace
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server # Select the ArgoCD server pod
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: argo # Allow traffic from the Argo namespace
+  policyTypes:
+  - Ingress # Only allow ingress traffic
+---
+# ArgoCD Service - Creates a service for the ArgoCD server to be accessed by the ArgoCD CLI
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-server # Name of the service
+  namespace: argocd # Apply the service to the argocd namespace
+spec:
+  ports:
+  - name: http # Name of the port
+    port: 80 # Port to expose
+    targetPort: 8080 # Port to forward traffic to
+  - name: https # Name of the port
+    port: 443 # Port to expose
+    targetPort: 8080 # Port to forward traffic to
+  selector:
+    app.kubernetes.io/name: argocd-server # Select the ArgoCD server pod
+```
+ 
+
+ 
+
+
+ ```yaml
+ - name: start-argocd-sync
+      inputs:
+        parameters:
+          - name: app-name
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            apt-get update && apt-get install -y curl sudo
+
+            curl -sSL -o argocd-linux-amd64
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+
+            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+
+            rm argocd-linux-amd64
+
+            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password
+            $ARGOCD_PASSWORD --insecure
+
+            argocd app sync {{inputs.parameters.app-name}}
+        env:
+          - name: ARGOCD_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: server
+          - name: ARGOCD_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: username
+          - name: ARGOCD_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: password
+        resources: {}
+ ```

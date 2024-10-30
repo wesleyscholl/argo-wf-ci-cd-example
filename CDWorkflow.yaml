@@ -42,6 +42,12 @@ spec:
                   value: '{{workflow.parameters.name}}'
                 - name: email
                   value: '{{workflow.parameters.email}}'
+        - - name: start-argocd-sync
+            template: start-argocd-sync
+            arguments:
+              parameters:
+                - name: app-name
+                  value: '{{workflow.parameters.path}}'
     - name: clone-repo
       inputs:
         parameters:
@@ -245,6 +251,38 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
+    - name: start-argocd-sync
+      inputs:
+        parameters:
+          - name: app-name
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: argoproj/argocd-cli:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - |
+            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
+            argocd app sync {{inputs.parameters.app-name}} --prune
+        env:
+          - name: ARGOCD_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: server
+          - name: ARGOCD_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: username
+          - name: ARGOCD_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: password
   entrypoint: main
   arguments:
     parameters:
