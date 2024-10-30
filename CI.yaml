@@ -1,33 +1,14 @@
 metadata:
   name: ci-workflow
-  namespace: argo-events
-  uid: 46efd2bf-456a-4622-a1e3-ce2b72812e9b
-  resourceVersion: '2868404'
-  generation: 10
-  creationTimestamp: '2024-10-16T17:18:11Z'
-  labels:
-    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
-  managedFields:
-    - manager: argo
-      operation: Update
-      apiVersion: argoproj.io/v1alpha1
-      time: '2024-10-21T23:41:18Z'
-      fieldsType: FieldsV1
-      fieldsV1:
-        f:metadata:
-          f:labels:
-            .: {}
-            f:workflows.argoproj.io/creator: {}
-        f:spec: {}
+  namespace: argo
 spec:
   templates:
     - name: main
       inputs: {}
       outputs: {}
       metadata: {}
-      dag:
-        tasks:
-          - name: clone-repo
+      steps:
+        - - name: clone-repo
             template: clone-repo
             arguments:
               parameters:
@@ -35,21 +16,59 @@ spec:
                   value: '{{workflow.parameters.repo}}'
                 - name: branch
                   value: '{{workflow.parameters.branch}}'
-          - name: build-executor
-            template: build-executor
+        - - name: build-executor
+            template: golang-task
             arguments:
               parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: clone-repo
-          - name: build-cli
-            template: build-cli
+                - name: commands
+                  value: >
+                    echo 'Building Argo Executor...'
+
+                    apt-get update && apt-get install -y curl
+
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+
+                    apt-get install -y nodejs
+
+                    npm install -g yarn@latest
+
+                    cd /work
+
+                    make controller kit STATIC_FILES=false
+
+                    [ -f /work/executor ] && echo 'Executor build successful.'
+                    || (echo 'Executor build failed.' && exit 1)
+
+                    echo /work/executor
+
+                    echo 'Argo Executor build complete'
+        - - name: build-cli
+            template: golang-task
             arguments:
               parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: build-executor
-          - name: create-exec-image
+                - name: commands
+                  value: >
+                    echo 'Building Argo CLI...'
+
+                    apt-get update && apt-get install -y curl
+
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+
+                    apt-get install -y nodejs
+
+                    npm install -g yarn@latest
+
+                    cd /work
+
+                    make cli STATIC_FILES=false
+
+                    [ -f /work/dist/argo ] && echo 'Argo CLI build successful.'
+                    || (echo 'Argo CLI build failed.' && exit 1)
+
+                    echo /work/dist/argo
+
+                    echo 'Argo CLI build complete'
+        - - name: create-exec-image
             template: create-image
             arguments:
               parameters:
@@ -57,8 +76,7 @@ spec:
                   value: '{{workflow.parameters.path}}'
                 - name: image
                   value: '{{workflow.parameters.exec-image}}'
-            depends: build-cli
-          - name: create-cli-image
+        - - name: create-cli-image
             template: create-image
             arguments:
               parameters:
@@ -66,39 +84,37 @@ spec:
                   value: '{{workflow.parameters.path}}'
                 - name: image
                   value: '{{workflow.parameters.cli-image}}'
-            depends: create-exec-image
-          - name: run-tests
-            template: run-tests
+        - - name: run-tests
+            template: golang-task
             arguments:
               parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: create-cli-image
-          - name: run-coverage
-            template: run-coverage
+                - name: commands
+                  value: >
+                    echo 'Running unit tests...'
+
+                    make test STATIC_FILES=false GOTEST='go test -p 20
+                    -covermode=atomic -coverprofile=coverage.out'
+
+                    [ -f /work/coverage.out ] && echo 'Unit tests passed.' ||
+                    (echo 'Unit tests failed.' && exit 1)
+
+                    echo 'Unit tests completed.'
+        - - name: run-coverage
+            template: golang-task
             arguments:
               parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: run-tests
-          - name: deploy
-            template: deploy
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-                - name: cli-image
-                  value: '{{workflow.parameters.cli-image}}'
-                - name: exec-image
-                  value: '{{workflow.parameters.exec-image}}'
-            depends: run-coverage
-          - name: run-e2e-tests
-            template: run-e2e-tests
-            arguments:
-              parameters:
-                - name: path
-                  value: '{{workflow.parameters.path}}'
-            depends: deploy
+                - name: commands
+                  value: >
+                    echo 'Collecting code coverage...'
+
+                    make coverage STATIC_FILES=false
+
+                    go tool cover -func=coverage.out
+
+                    [ -f /work/coverage.out ] && echo 'Coverage report
+                    collected.' || (echo 'Coverage report failed.' && exit 1)
+
+                    echo 'Coverage report collected.'
     - name: clone-repo
       inputs:
         parameters:
@@ -126,86 +142,27 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
-    - name: build-executor
+    - name: golang-task
       inputs:
         parameters:
-          - name: path
+          - name: commands
       outputs: {}
       metadata: {}
       container:
         name: ''
         image: golang:1.23
         command:
-          - sh
+          - /bin/sh
           - '-c'
         args:
-          - |
-            echo 'Building Argo Executor...'
-            apt-get update 
-            apt-get install -y curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y nodejs
-            npm install -g yarn@latest
-            cd /work
-            make controller kit STATIC_FILES=false
-            if [ -f /work/executor ]; then
-              echo 'Executor build successful.'
-            else
-              echo 'Executor build failed.'
-              exit 1
-            fi
-            # Echo filepath of the executor binary
-            echo /work/executor
-            echo 'Argo Executor build complete'
+          - '{{inputs.parameters.commands}}'
         workingDir: /work/
         env:
           - name: GO111MODULE
             value: 'on'
         resources:
           requests:
-            cpu: '4'
-            memory: 4Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
-    - name: build-cli
-      inputs:
-        parameters:
-          - name: path
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: golang:1.23
-        command:
-          - sh
-          - '-c'
-        args:
-          - |
-            echo 'Building Argo CLI...'
-            apt-get update 
-            apt-get install -y curl
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-            apt-get install -y nodejs
-            npm install -g yarn@latest
-            cd /work
-            make cli STATIC_FILES=false
-            if [ -f /work/dist/argo ]; then
-              echo 'Argo CLI build successful.'
-            else
-              echo 'Argo CLI build failed.'
-              exit 1
-            fi
-            # Echo filepath of the CLI binary
-            echo /work/dist/argo
-            echo 'Argo CLI build complete'
-        workingDir: /work/
-        env:
-          - name: GO111MODULE
-            value: 'on'
-        resources:
-          requests:
-            cpu: '4'
+            cpu: '2'
             memory: 4Gi
         volumeMounts:
           - name: work
@@ -240,8 +197,8 @@ spec:
             value: /.docker
         resources:
           requests:
-            cpu: '3'
-            memory: 6Gi
+            cpu: '2'
+            memory: 4Gi
         volumeMounts:
           - name: work
             mountPath: /work
@@ -257,160 +214,6 @@ spec:
         - name: docker-config
           secret:
             secretName: docker-config
-    - name: run-tests
-      inputs:
-        parameters:
-          - name: path
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: golang:1.23
-        command:
-          - sh
-          - '-c'
-        args:
-          - >
-            echo 'Running unit tests...' make test STATIC_FILES=false GOTEST='go
-            test -p 20 -covermode=atomic -coverprofile=coverage.out' if [ -f
-            /work/coverage.out ]; then
-              echo 'Unit tests passed.'
-            else
-              echo 'Unit tests failed.'
-              exit 1
-            fi echo 'Unit tests completed.'
-        workingDir: /work/
-        resources:
-          requests:
-            cpu: '3'
-            memory: 6Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
-    - name: run-coverage
-      inputs:
-        parameters:
-          - name: path
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: golang:1.23
-        command:
-          - sh
-          - '-c'
-        args:
-          - |
-            echo 'Collecting code coverage...'
-            make coverage STATIC_FILES=false
-            go tool cover -func=coverage.out
-            if [ -f /work/coverage.out ]; then
-              echo 'Coverage report collected.'
-            else
-              echo 'Coverage report failed.'
-              exit 1
-            fi
-            echo 'Coverage report collected.'
-        workingDir: /work/
-        resources:
-          requests:
-            cpu: '3'
-            memory: 6Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
-    - name: deploy
-      inputs:
-        parameters:
-          - name: path
-          - name: cli-image
-          - name: exec-image
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: docker:19.03.12
-        command:
-          - sh
-          - '-c'
-        args:
-          - |
-            echo 'Deploying to cluster...'
-            # Pull the images from Docker Hub
-            docker pull {{inputs.parameters.cli-image}}
-            docker pull {{inputs.parameters.exec-image}}
-            # Tag the cli image
-            docker tag {{inputs.parameters.cli-image}} argo-cli:latest
-            # Tag the exec image
-            docker tag {{inputs.parameters.exec-image}} argo-exec:latest
-            # Load the images into the exsiitng cluster (argo workflows is running in)
-            docker load < /images/argo-cli.tar
-            docker load < /images/argo-exec.tar
-
-            # Apply the manifests
-            kubectl apply -f /manifests/install.yaml
-            # Setup the kind cluster
-            kind create cluster --name argo
-            # Load the image into the kind cluster
-            kind load docker-image argo-workflows:latest --name argo
-            # Apply the manifests
-            kubectl apply -f /manifests/install.yaml
-            if [ $? -ne 0 ]; then
-              echo 'Deployment failed.'
-              exit 1
-            fi
-            echo 'Deployment successful.'
-        workingDir: /work/
-        resources:
-          requests:
-            cpu: '2'
-            memory: 4Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
-    - name: run-e2e-tests
-      inputs:
-        parameters:
-          - name: path
-      outputs: {}
-      metadata: {}
-      container:
-        name: ''
-        image: golang:1.23
-        command:
-          - sh
-          - '-c'
-        args:
-          - |
-            echo 'Running E2E tests...'
-            sudo apt-get -y install socat
-            # Don't need, previously built
-            #make controller kit STATIC_FILES=false
-            make start PROFILE=mysql \
-            AUTH_MODE=client STATIC_FILES=false \
-            LOG_LEVEL=info \
-            API=true \
-            UI=false \
-            POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
-            make wait PROFILE=mysql API=true
-            if [ $? -ne 0 ]; then
-              echo 'Controller failed to start.'
-              exit 1
-            fi
-            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
-            if [ $? -ne 0 ]; then
-              echo 'E2E tests failed.'
-              exit 1
-            fi
-            echo 'E2E tests completed. Collecting reports...'
-        workingDir: /work/
-        resources:
-          requests:
-            cpu: '3'
-            memory: 6Gi
-        volumeMounts:
-          - name: work
-            mountPath: /work
   entrypoint: main
   arguments:
     parameters:
@@ -418,13 +221,19 @@ spec:
         value: https://github.com/konjo-open-src/argo-workflows
       - name: branch
         value: refs/heads/main
+      - name: name
+        value: wesleyscholl
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com
       - name: path
         value: argo-workflows
       - name: cli-image
         value: wesmsl/argocli:v1
       - name: exec-image
         value: wesmsl/argoexec:v1
-  serviceAccountName: operate-workflow-sa
+      - name: tag
+        value: v1
+  serviceAccountName: argo-workflow-sa
   volumeClaimTemplates:
     - metadata:
         name: work
@@ -434,5 +243,5 @@ spec:
           - ReadWriteOnce
         resources:
           requests:
-            storage: 64Mi
+            storage: 2Gi
       status: {}

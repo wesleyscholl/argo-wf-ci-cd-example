@@ -259,14 +259,25 @@ spec:
       metadata: {}
       container:
         name: ''
-        image: argoproj/argocd-cli:latest
+        image: ubuntu:latest
         command:
           - sh
           - '-c'
         args:
-          - |
-            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
-            argocd app sync {{inputs.parameters.app-name}} --prune
+          - >
+            apt-get update && apt-get install -y curl sudo
+
+            curl -sSL -o argocd-linux-amd64
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+
+            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+
+            rm argocd-linux-amd64
+
+            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password
+            $ARGOCD_PASSWORD --insecure
+
+            argocd app sync {{inputs.parameters.app-name}}
         env:
           - name: ARGOCD_SERVER
             valueFrom:
@@ -283,6 +294,7 @@ spec:
               secretKeyRef:
                 name: argocd-env-secret
                 key: password
+        resources: {}
   entrypoint: main
   arguments:
     parameters:
@@ -312,5 +324,5 @@ spec:
           - ReadWriteOnce
         resources:
           requests:
-            storage: 5Gi
+            storage: 2Gi
       status: {}

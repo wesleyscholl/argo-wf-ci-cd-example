@@ -154,8 +154,14 @@ spec:
                 dataKey: body.pusher.email # (User email)
               dest: spec.arguments.parameters.3.value
   template:
-    serviceAccountName: operate-workflow-sa # Service account to use - Required to submit workflows
+    serviceAccountName: operate-workflow-sa # Service account to use - Required to create workflows
 ```
+
+## `ServiceAccount`, `Role` and `RoleBinding` Configuration
+
+A service account is required to create workflows from the trigger and operate the CI/CD workflows. 
+
+See the yaml configuration here: [ServiceAccountRoleBindingRole](ServiceAccountRoleBindingRole.yaml) 
 
 ## Testing the configuration
 

@@ -24,8 +24,8 @@ kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: argo-workflow-sa
-  namespace: argo
+  name: argo-workflow-sa # Name of the service account
+  namespace: argo # Apply the service account to the Argo namespace
 EOF
 
 # Role
@@ -33,12 +33,18 @@ kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: argo-pod-patcher
-  namespace: argo
+  name: argo-pod-patcher # Name of the role
+  namespace: argo # Apply the role to the Argo namespace
 rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "patch", "watch"]
+  - apiGroups: [""] 
+    resources: ["pods"] # Apply the role to pods
+    verbs: ["get", "list", "patch", "watch"] # Allow the service account to get, list, patch, and watch pods
+  - apiGroups: ["argoproj.io"] 
+    resources: ["workflows"] # Apply the role to workflows
+    verbs: ["create"] # Allow the service account to create workflows
+  - apiGroups: ["argoproj.io"] 
+    resources: ["workflowtemplates"] # Apply the role to workflow templates
+    verbs: ["get", "list"] # Allow the service account to get and list workflow templates
 EOF
 
 # RoleBinding
@@ -46,16 +52,16 @@ kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: argo-pod-patcher-binding
-  namespace: argo
+  name: argo-pod-patcher-binding # Name of the role binding
+  namespace: argo # Apply the role binding to the Argo namespace
 roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: argo-pod-patcher
+  apiGroup: rbac.authorization.k8s.io 
+  kind: Role 
+  name: argo-pod-patcher # Reference the role
 subjects:
-  - kind: ServiceAccount
-    name: argo-workflow-sa
-    namespace: argo
+  - kind: ServiceAccount 
+    name: argo-workflow-sa # Reference the service account
+    namespace: argo # Reference the namespace
 EOF
 
 ---
