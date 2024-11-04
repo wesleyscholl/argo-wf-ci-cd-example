@@ -296,3 +296,31 @@ data:
         logs:
           level: "debug"
 EOF
+
+kubectl apply -f - <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowEventBinding
+metadata:
+  name: event-consumer
+  namespace: argo
+spec:
+  event:
+    selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != "" # To evaluate properties and values within the payload
+  submit:
+    workflowTemplateRef:
+      name: ci-workflow # Name of the WorkflowTemplate to trigger
+    arguments:
+      parameters: # Parameters to pass to the WorkflowTemplate
+        - name: repo
+          valueFrom:
+            event: payload.repository.html_url # GitHub url
+        - name: branch
+          valueFrom:
+            event: payload.ref # GitHub ref branch
+        - name: name
+          valueFrom:
+            event: payload.pusher.name # GitHub user name
+        - name: email
+          valueFrom:
+            event: payload.pusher.email # GitHub user email
+EOF

@@ -1,3 +1,84 @@
+# Argo Workflows - CI/CD Setup Guide
+#
+# Overview:
+# To run this workflow end-to-end, configure the following components.
+#
+
+# 1. GitHub Webhooks Configuration
+#
+# - Set up GitHub Webhooks: Follow this GitHub Webhooks guide: https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks
+#
+
+# 2. WorkflowEventBinding
+#
+# - API Endpoint: `/api/v1/events/{namespace}/{discriminator}` to submit a `WorkflowTemplate` or `ClusterWorkflowTemplate`.
+#
+# - Setup Guide: WorkflowEventBinding setup instructions can be found here: https://argo-workflows.readthedocs.io/en/latest/events/
+#
+# - Example WorkflowEventBinding: Check the example at https://argo-workflows.readthedocs.io/en/latest/events/#submitting-a-workflow-from-a-workflow-template
+#
+# RBAC Configuration for WorkflowEventBinding:
+#
+# - Permissions: Ensure proper RBAC permissions for WorkflowEventBinding to submit workflows.
+#
+# - Example Role: WorkflowEventBinding Role YAML can be found at https://raw.githubusercontent.com/argoproj/argo-workflows/main/manifests/quick-start/base/webhooks/submit-workflow-template-role.yaml
+#
+# Authorization:
+#
+# - Auth Token: Required in the `Authorization` header to trigger WorkflowEventBinding. Follow these steps to create an access token: https://argo-workflows.readthedocs.io/en/latest/access-token/
+#
+
+# 3. Docker Configuration
+#
+# - Access Token for Docker Hub: Generate a personal access token at https://hub.docker.com/settings/security to publish Docker images.
+#
+# - Secret Creation:
+#
+#    - Environment Variables:
+#      export DOCKER_USERNAME=******
+#      export DOCKER_TOKEN=******
+#
+#    - Kubernetes Secret Creation: Add `-n <namespace>` for specific namespaces.
+#
+#      kubectl create secret generic docker-config --from-literal="config.json={\"auths\": {\"https://index.docker.io/v1/\": {\"auth\": \"$(echo -n $DOCKER_USERNAME:$DOCKER_TOKEN|base64)\"}}}"
+#
+# - GitHub Personal Access Token: Required to commit and push updates. Store it as a Kubernetes secret:
+#
+#      kubectl create secret generic github-token --from-literal=token=<Your_GitHub_PAT> -n argo
+#
+
+# 4. Argo CD Configuration
+#
+# - Install ArgoCD: Follow the ArgoCD installation guide at https://argo-cd.readthedocs.io/en/latest/getting_started/
+#
+# - Security Notice: Ensure secure configuration (initial password change, auth setup). For details, see ArgoCD security documentation: https://argo-cd.readthedocs.io/en/latest/operator-manual/security/
+#
+# - Accessing ArgoCD Server:
+#    - Port Forward:
+#      kubectl port-forward svc/argocd-server -n argocd 8080:443
+#
+#    - Retrieve Admin Password:
+#      argocd admin initial-password -n argocd
+#
+# - ArgoCD Secret Creation:
+#
+#      apiVersion: v1
+#      kind: Secret
+#      metadata:
+#        name: argocd-env-secret # Name of secret
+#        namespace: argo # Namespace
+#      type: Opaque
+#      stringData:
+#        server: <ArgoCD-Server-Deployment-Url> # Deployment URL
+#        username: admin # Admin username
+#        password: abc..........xyz # Admin password
+#
+# Network Policy:
+#
+# - Traffic Configuration: Create a `NetworkPolicy` to allow traffic from the Argo namespace to the ArgoCD namespace for `argocd-server`.
+#   Ensure to set up a `Service` for ArgoCD to be accessible by the CLI.
+#
+
 metadata:
   name: ci-cd-workflow
   namespace: argo
@@ -43,9 +124,9 @@ spec:
             arguments:
               parameters:
                 - name: path
-                  value: '{{workflow.parameters.path}}'
+                  value: '{{workflow.parameters.exec-path}}'
                 - name: image
-                  value: '{{workflow.parameters.exec-image}}'
+                  value: '{{workflow.parameters.image}}'
                 - name: tag
                   value: '{{workflow.parameters.tag}}'
         - - name: create-cli-image
@@ -53,9 +134,9 @@ spec:
             arguments:
               parameters:
                 - name: path
-                  value: '{{workflow.parameters.path}}'
+                  value: '{{workflow.parameters.cli-path}}'
                 - name: image
-                  value: '{{workflow.parameters.cli-image}}'
+                  value: '{{workflow.parameters.image}}'
                 - name: tag
                   value: '{{workflow.parameters.tag}}'
         - - name: run-tests
@@ -66,11 +147,15 @@ spec:
                   value: >
                     echo 'Running unit tests...'
 
+                    # Run unit tests
+
                     make test STATIC_FILES=false GOTEST='go test -p 20
-                    -covermode=atomic -coverprofile=coverage.out' # Run unit tests
+                    -covermode=atomic -coverprofile=coverage.out' 
+
+                    # Check if the tests passed
 
                     [ -f /work/coverage.out ] && echo 'Unit tests passed.' ||
-                    (echo 'Unit tests failed.' && exit 1) # Check if the tests passed
+                    (echo 'Unit tests failed.' && exit 1) 
         - - name: run-coverage
             template: golang-step
             arguments:
@@ -79,20 +164,28 @@ spec:
                   value: >
                     echo 'Collecting code coverage...'
 
-                    make coverage STATIC_FILES=false # Collect code coverage
+                    # Collect code coverage
 
-                    go tool cover -func=coverage.out # Display code coverage
+                    make coverage STATIC_FILES=false 
+
+                    # Display code coverage
+
+                    go tool cover -func=coverage.out 
+
+                    # Check if the coverage report collection was successful
 
                     [ -f /work/coverage.out ] && echo 'Coverage report
-                    collected.' || (echo 'Coverage report failed.' && exit 1) # Check if the coverage report collection was successful
+                    collected.' || (echo 'Coverage report failed.' && exit 1) 
         - - name: prepare-deploy-to-cluster-e2e-test
             template: prepare-deploy-to-cluster-e2e-test
             arguments:
               parameters:
-                - name: cli-image
-                  value: '{{workflow.parameters.cli-image}}'
-                - name: exec-image
-                  value: '{{workflow.parameters.exec-image}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+                - name: exec-path
+                  value: '{{workflow.parameters.exec-path}}'
+                - name: cli-path
+                  value: '{{workflow.parameters.cli-path}}'
         - - name: approval
             template: approval
             arguments: {}
@@ -100,16 +193,22 @@ spec:
             template: docker-tag-push
             arguments:
               parameters:
-                - name: cli-image
-                  value: '{{workflow.parameters.cli-image}}'
-                - name: exec-image
-                  value: '{{workflow.parameters.exec-image}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+                - name: exec-path
+                  value: '{{workflow.parameters.exec-path}}'
+                - name: cli-path
+                  value: '{{workflow.parameters.cli-path}}'
         - - name: update-manifests
             template: update-manifests
             arguments:
               parameters:
-                - name: image-name
-                  value: '{{workflow.parameters.cli-image}}'
+                - name: image
+                  value: '{{workflow.parameters.image}}'
+                - name: cli-path
+                  value: '{{workflow.parameters.cli-path}}'
+                - name: exec-path
+                  value: '{{workflow.parameters.exec-path}}'
                 - name: image-tag
                   value: '{{workflow.parameters.tag}}'
         - - name: commit-manifests
@@ -169,7 +268,7 @@ spec:
           - /bin/sh
           - '-c'
         args:
-          - '{{inputs.parameters.commands}}' # Parameterized commands
+          - '{{inputs.parameters.commands}}' # Parameterized step commands
         workingDir: /work/ # Working directory
         env:
           - name: GO111MODULE
@@ -202,9 +301,9 @@ spec:
           - context=. # Context path
           - '--local'
           - dockerfile=. # Dockerfile path
-          - '--output'
+          - '--output' # Creates image with tag and pushes to registry
           - >-
-            type=image,name={{inputs.parameters.image}}:{{inputs.parameters.tag}},push=true # Creates image with tag and pushes to registry
+            type=image,name={{inputs.parameters.image}}{{inputs.parameters.path}}:{{inputs.parameters.tag}},push=true 
           - '--opt'
           - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
         workingDir: /work/ # Working directory
@@ -235,8 +334,9 @@ spec:
     - name: prepare-deploy-to-cluster-e2e-test
       inputs:
         parameters:
-          - name: cli-image
-          - name: exec-image
+          - name: image
+          - name: exec-path
+          - name: cli-path
       outputs: {}
       metadata: {}
       container:
@@ -337,10 +437,9 @@ spec:
 
             echo "Pulling images from docker hub..."
 
-            docker pull {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
 
-            docker pull
-            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
 
             docker images
 
@@ -372,11 +471,9 @@ spec:
 
             echo "Loading images into k3d cluster..."
 
-            docker save {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar
+            docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar
 
-            docker save
-            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}} -o
-            /tmp/argocli.tar
+            docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} -o /tmp/argocli.tar
 
             docker load < /tmp/argoexec.tar
 
@@ -490,8 +587,9 @@ spec:
     - name: docker-tag-push
       inputs:
         parameters:
-          - name: cli-image
-          - name: exec-image
+          - name: image
+          - name: exec-path
+          - name: cli-path
       outputs: {}
       metadata: {}
       container:
@@ -540,9 +638,9 @@ spec:
 
             echo "Pulling the CLI and exec images..."
 
-            docker pull {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
 
-            docker pull {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
 
             # Tag and push images to docker hub
 
@@ -550,17 +648,15 @@ spec:
 
             docker images
 
-            docker tag {{inputs.parameters.cli-image}}
-            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+            docker tag {{inputs.parameters.image}}{{inputs.parameters.cli-path}} 
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
 
-            docker tag {{inputs.parameters.exec-image}}
-            {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
+            docker tag {{inputs.parameters.image}}{{inputs.parameters.exec-path}} 
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
 
-            docker push
-            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+            docker push {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
 
-            docker push
-            {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
+            docker push {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375 # Docker host URL
@@ -591,7 +687,9 @@ spec:
     - name: update-manifests
       inputs:
         parameters:
-          - name: image-name
+          - name: image
+          - name: cli-path
+          - name: exec-path
           - name: image-tag
       outputs: {}
       metadata: {}
@@ -619,10 +717,13 @@ spec:
 
             cd manifests/base
 
-            # Update the kustomization.yaml with the new image
+            # Update the kustomization.yaml with the new images
 
             kustomize edit set image
-            {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}}
+
+            kustomize edit set image
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}}
 
             # Ensure the kustomization.yaml is updated
 
@@ -750,10 +851,8 @@ spec:
         value: argoexec # Path for Argo Exec
       - name: cli-path 
         value: argocli # Path for Argo CLI
-      - name: cli-image
-        value: wesmsl/argocli # Argo CLI image - docker hub username/repo
-      - name: exec-image
-        value: wesmsl/argoexec # Argo Exec image - docker hub username/repo
+      - name: image
+        value: wesmsl/ # Docker hub username/ for images
       - name: tag 
         value: v1 # Tag for the images
   serviceAccountName: argo-workflow-sa # Service account name
