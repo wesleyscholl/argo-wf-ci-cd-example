@@ -265,3 +265,34 @@ subjects:
     name: operate-workflow-sa
     namespace: argo-events
 EOF
+
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent-config
+  namespace: po-optimization
+data:
+  otel-agent-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+    exporters:
+      otlp:
+        endpoint: "otel-collector-service.monitoring.svc.cluster.local:4317"
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          exporters: [otlp]
+      telemetry:
+        logs:
+          level: "debug"
+EOF

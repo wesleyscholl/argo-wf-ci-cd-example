@@ -16,32 +16,6 @@ spec:
                   value: '{{workflow.parameters.repo}}'
                 - name: branch
                   value: '{{workflow.parameters.branch}}'
-        - - name: build-executor
-            template: golang-task
-            arguments:
-              parameters:
-                - name: commands
-                  value: >
-                    echo 'Building Argo Executor...'
-
-                    apt-get update && apt-get install -y curl
-
-                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-
-                    apt-get install -y nodejs
-
-                    npm install -g yarn@latest
-
-                    cd /work
-
-                    make controller kit STATIC_FILES=false
-
-                    [ -f /work/executor ] && echo 'Executor build successful.'
-                    || (echo 'Executor build failed.' && exit 1)
-
-                    echo /work/executor
-
-                    echo 'Argo Executor build complete'
         - - name: build-cli
             template: golang-task
             arguments:
@@ -50,24 +24,20 @@ spec:
                   value: >
                     echo 'Building Argo CLI...'
 
-                    apt-get update && apt-get install -y curl
+                    apt-get update && apt-get install -y curl sudo # Install curl and sudo
 
-                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - # Download Node.js
 
-                    apt-get install -y nodejs
+                    apt-get install -y nodejs # Install Node.js
 
-                    npm install -g yarn@latest
+                    npm install -g yarn@latest # Install Yarn
 
-                    cd /work
+                    cd /work 
 
-                    make cli STATIC_FILES=false
+                    make cli STATIC_FILES=false # Build the Argo CLI
 
                     [ -f /work/dist/argo ] && echo 'Argo CLI build successful.'
-                    || (echo 'Argo CLI build failed.' && exit 1)
-
-                    echo /work/dist/argo
-
-                    echo 'Argo CLI build complete'
+                    || (echo 'Argo CLI build failed.' && exit 1) # Check if the build was successful
         - - name: create-exec-image
             template: create-image
             arguments:
@@ -76,6 +46,8 @@ spec:
                   value: '{{workflow.parameters.path}}'
                 - name: image
                   value: '{{workflow.parameters.exec-image}}'
+                - name: tag
+                  value: '{{workflow.parameters.tag}}'
         - - name: create-cli-image
             template: create-image
             arguments:
@@ -84,6 +56,8 @@ spec:
                   value: '{{workflow.parameters.path}}'
                 - name: image
                   value: '{{workflow.parameters.cli-image}}'
+                - name: tag
+                  value: '{{workflow.parameters.tag}}'
         - - name: run-tests
             template: golang-task
             arguments:
@@ -93,12 +67,10 @@ spec:
                     echo 'Running unit tests...'
 
                     make test STATIC_FILES=false GOTEST='go test -p 20
-                    -covermode=atomic -coverprofile=coverage.out'
+                    -covermode=atomic -coverprofile=coverage.out' # Run unit tests
 
                     [ -f /work/coverage.out ] && echo 'Unit tests passed.' ||
-                    (echo 'Unit tests failed.' && exit 1)
-
-                    echo 'Unit tests completed.'
+                    (echo 'Unit tests failed.' && exit 1) # Check if the tests passed
         - - name: run-coverage
             template: golang-task
             arguments:
@@ -107,14 +79,12 @@ spec:
                   value: >
                     echo 'Collecting code coverage...'
 
-                    make coverage STATIC_FILES=false
+                    make coverage STATIC_FILES=false # Collect code coverage
 
-                    go tool cover -func=coverage.out
+                    go tool cover -func=coverage.out # Display code coverage
 
                     [ -f /work/coverage.out ] && echo 'Coverage report
-                    collected.' || (echo 'Coverage report failed.' && exit 1)
-
-                    echo 'Coverage report collected.'
+                    collected.' || (echo 'Coverage report failed.' && exit 1) # Check if the coverage report collection was successful
     - name: clone-repo
       inputs:
         parameters:
@@ -128,18 +98,18 @@ spec:
         args:
           - clone
           - '--depth'
-          - '1'
+          - '1' # Shallow clone
           - '--branch'
           - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch 
           - '--single-branch'
           - '{{inputs.parameters.repo}}' # https://github.com/argoproj/argo-workflows
           - .
-        workingDir: /work
-        resources:
+        workingDir: /work # Working directory
+        resources: # Adjust resources as needed
           requests:
             cpu: '1'
             memory: 2Gi
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
     - name: golang-task
@@ -156,10 +126,10 @@ spec:
           - '-c'
         args:
           - '{{inputs.parameters.commands}}' # Parameterized commands
-        workingDir: /work/
+        workingDir: /work/ # Working directory
         env:
           - name: GO111MODULE
-            value: 'on'
+            value: 'on' # Enable Go modules
         resources: # Adjust resources as needed
           requests:
             cpu: '2'
@@ -172,6 +142,7 @@ spec:
         parameters:
           - name: path
           - name: image
+          - name: tag
       outputs: {}
       metadata: {}
       container:
@@ -181,36 +152,39 @@ spec:
           - buildctl-daemonless.sh
         args:
           - build
-          - '--frontend'
-          - dockerfile.v0
+          - '--frontend' 
+          - dockerfile.v0 
           - '--local'
-          - context=.
+          - context=. # Context path
           - '--local'
-          - dockerfile=.
+          - dockerfile=. # Dockerfile path
           - '--output'
-          - type=image,name=docker.io/{{inputs.parameters.image}},push=true # Creates an image and pushes
-        workingDir: /work/
+          - >-
+            type=image,name={{inputs.parameters.image}}:{{inputs.parameters.tag}},push=true # Creates image with tag and pushes to registry
+          - '--opt'
+          - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
+        workingDir: /work/ # Working directory
         env:
-          - name: BUILDKITD_FLAGS
-            value: '--oci-worker-no-process-sandbox'
+          - name: BUILDKITD_FLAGS # Disable process sandbox
+            value: '--oci-worker-no-process-sandbox' 
           - name: DOCKER_CONFIG # Pass in the docker config as an environment variable
             value: /.docker
         resources: # Adjust as needed
           requests:
             cpu: '3'
             memory: 6Gi
-        volumeMounts:
-          - name: work # Shared volume
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work # Shared working volume
             mountPath: /work
-          - name: docker-config # Ensure to mount this volume
+          - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
             mountPath: /.docker # Using this mount path
-        readinessProbe:
-          exec:
-            command:
+        readinessProbe: 
+          exec: 
+            command: 
               - sh
               - '-c'
-              - buildctl debug workers
-      volumes:
+              - buildctl debug workers # Check if the buildkit workers are running
+      volumes: 
         - name: docker-config # Ensure this volume is configured
           secret:
             secretName: docker-config # This secret holds the API key to your Docker registry
@@ -218,30 +192,34 @@ spec:
   arguments:
     parameters:
       - name: repo
-        value: https://github.com/konjo-open-src/argo-workflows
+        value: https://github.com/konjo-open-src/argo-workflows # Repository URL
       - name: branch
-        value: refs/heads/main
+        value: refs/heads/main # Branch name from the webhook payload (e.g., refs/heads/main, refs/heads/feature-branch)
       - name: name
-        value: wesleyscholl
+        value: wesleyscholl # GitHub username
       - name: email
-        value: 128409641+wesleyscholl@users.noreply.github.com
+        value: 128409641+wesleyscholl@users.noreply.github.com # GitHub email
       - name: path
-        value: argo-workflows
+        value: argo-workflows # Root path of the repository
+      - name: exec-path
+        value: argoexec # Path for Argo Exec
+      - name: cli-path 
+        value: argocli # Path for Argo CLI
       - name: cli-image
-        value: wesmsl/argocli:v1
+        value: wesmsl/argocli # Argo CLI image - docker hub username/repo
       - name: exec-image
-        value: wesmsl/argoexec:v1
-      - name: tag
-        value: v1
-  serviceAccountName: argo-workflow-sa
-  volumeClaimTemplates:
+        value: wesmsl/argoexec # Argo Exec image - docker hub username/repo
+      - name: tag 
+        value: v1 # Tag for the images
+  serviceAccountName: argo-workflow-sa # Service account name
+  volumeClaimTemplates: # Shared volume claim templates
     - metadata:
-        name: work
+        name: work # Shared volume claim name
         creationTimestamp: null
       spec:
         accessModes:
-          - ReadWriteOnce
+          - ReadWriteOnce # Read-write access mode
         resources:
           requests:
-            storage: 2Gi
+            storage: 15Gi # Storage size
       status: {}

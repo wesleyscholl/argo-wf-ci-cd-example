@@ -1,0 +1,745 @@
+metadata:
+  name: ci-workflow
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: '{{workflow.parameters.repo}}'
+                - name: branch
+                  value: '{{workflow.parameters.branch}}'
+        - - name: build-cli
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Building Argo CLI...'
+
+                    apt-get update && apt-get install -y curl sudo # Install curl and sudo
+
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - # Download Node.js
+
+                    apt-get install -y nodejs # Install Node.js
+
+                    npm install -g yarn@latest # Install Yarn
+
+                    cd /work 
+
+                    make cli STATIC_FILES=false # Build the Argo CLI
+
+                    [ -f /work/dist/argo ] && echo 'Argo CLI build successful.'
+                    || (echo 'Argo CLI build failed.' && exit 1) # Check if the build was successful
+        - - name: create-exec-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.exec-image}}'
+                - name: tag
+                  value: '{{workflow.parameters.tag}}'
+        - - name: create-cli-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: '{{workflow.parameters.path}}'
+                - name: image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: tag
+                  value: '{{workflow.parameters.tag}}'
+        - - name: run-tests
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Running unit tests...'
+
+                    make test STATIC_FILES=false GOTEST='go test -p 20
+                    -covermode=atomic -coverprofile=coverage.out' # Run unit tests
+
+                    [ -f /work/coverage.out ] && echo 'Unit tests passed.' ||
+                    (echo 'Unit tests failed.' && exit 1) # Check if the tests passed
+        - - name: run-coverage
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Collecting code coverage...'
+
+                    make coverage STATIC_FILES=false # Collect code coverage
+
+                    go tool cover -func=coverage.out # Display code coverage
+
+                    [ -f /work/coverage.out ] && echo 'Coverage report
+                    collected.' || (echo 'Coverage report failed.' && exit 1) # Check if the coverage report collection was successful
+        - - name: prepare-deploy-to-cluster-e2e-test
+            template: prepare-deploy-to-cluster-e2e-test
+            arguments:
+              parameters:
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+        - - name: approval
+            template: approval
+            arguments: {}
+        - - name: docker-tag-push
+            template: docker-tag-push
+            arguments:
+              parameters:
+                - name: cli-image
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: exec-image
+                  value: '{{workflow.parameters.exec-image}}'
+        - - name: update-manifests
+            template: update-manifests
+            arguments:
+              parameters:
+                - name: image-name
+                  value: '{{workflow.parameters.cli-image}}'
+                - name: image-tag
+                  value: '{{workflow.parameters.tag}}'
+        - - name: commit-manifests
+            template: commit-manifests
+            arguments:
+              parameters:
+                - name: commit-message
+                  value: Update image to {{workflow.parameters.tag}}
+                - name: name
+                  value: '{{workflow.parameters.name}}'
+                - name: email
+                  value: '{{workflow.parameters.email}}'
+        - - name: start-argocd-sync
+            template: start-argocd-sync
+            arguments:
+              parameters:
+                - name: app-name
+                  value: '{{workflow.parameters.path}}'
+
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - '--depth'
+          - '1' # Shallow clone
+          - '--branch'
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch 
+          - '--single-branch'
+          - '{{inputs.parameters.repo}}' # https://github.com/argoproj/argo-workflows
+          - .
+        workingDir: /work # Working directory
+        resources: # Adjust resources as needed
+          requests:
+            cpu: '1'
+            memory: 2Gi
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work
+            mountPath: /work
+    - name: golang-step
+      inputs:
+        parameters:
+          - name: commands
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: golang:1.23
+        command:
+          - /bin/sh
+          - '-c'
+        args:
+          - '{{inputs.parameters.commands}}' # Parameterized commands
+        workingDir: /work/ # Working directory
+        env:
+          - name: GO111MODULE
+            value: 'on' # Enable Go modules
+        resources: # Adjust resources as needed
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work
+            mountPath: /work
+    - name: create-image
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+          - name: tag
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: moby/buildkit:v0.9.3-rootless
+        command:
+          - buildctl-daemonless.sh
+        args:
+          - build
+          - '--frontend' 
+          - dockerfile.v0 
+          - '--local'
+          - context=. # Context path
+          - '--local'
+          - dockerfile=. # Dockerfile path
+          - '--output'
+          - >-
+            type=image,name={{inputs.parameters.image}}:{{inputs.parameters.tag}},push=true # Creates image with tag and pushes to registry
+          - '--opt'
+          - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
+        workingDir: /work/ # Working directory
+        env:
+          - name: BUILDKITD_FLAGS # Disable process sandbox
+            value: '--oci-worker-no-process-sandbox' 
+          - name: DOCKER_CONFIG # Pass in the docker config as an environment variable
+            value: /.docker
+        resources: # Adjust as needed
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work # Shared working volume
+            mountPath: /work
+          - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
+            mountPath: /.docker # Using this mount path
+        readinessProbe: 
+          exec: 
+            command: 
+              - sh
+              - '-c'
+              - buildctl debug workers # Check if the buildkit workers are running
+      volumes: 
+        - name: docker-config # Ensure this volume is configured
+          secret:
+            secretName: docker-config # This secret holds the API key to your Docker registry
+    - name: prepare-deploy-to-cluster-e2e-test
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            apt-get update
+
+            # Install dependencies
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo golang make socat
+
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+
+            sudo apt-get install -y lsof
+
+            # Test make command
+
+            make --version
+
+            # Install k3d
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            # Install kubectl
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            # Download and configure Docker
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            # Wait for Docker 
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            # Configure and increase docker ufile limits -
+            /etc/docker/daemon.json
+
+            echo "Configuring and increasing docker file limits..."
+
+            echo '{ "default-ulimits": { "nofile": { "Name": "nofile", "Hard":
+            1048576, "Soft": 1048576 } } }' | sudo tee /etc/docker/daemon.json
+
+            # Confirm the docker ufile changes
+
+            echo "Confirming the docker file limit changes..."
+
+            cat /etc/docker/daemon.json
+
+            # Restart Docker
+
+            echo "Restarting Docker..."
+
+            sudo systemctl restart docker 
+
+            # Wait for Docker to be ready
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            # Pull the images from docker hub
+
+            echo "Pulling images from docker hub..."
+
+            docker pull {{inputs.parameters.exec-image}}
+
+            docker pull
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker images
+
+            # Create k3d cluster
+
+            echo "Creating k3d cluster..."
+
+            k3d cluster create argocluster --kubeconfig-switch-context
+
+            # Wait for k3d cluster to be ready
+
+            echo "Waiting for k3d cluster to be ready..."
+
+            until kubectl cluster-info; do sleep 3; done
+
+            echo "k3d is ready. Running commands..."
+
+            # Merge kubeconfig - set context to k3d cluster
+
+            echo "Merging kubeconfig and switching context to k3d cluster..."
+
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context
+
+            kubectl cluster-info
+
+            kubectl version
+
+            # Load the images into the k3d cluster
+
+            echo "Loading images into k3d cluster..."
+
+            docker save {{inputs.parameters.exec-image}} -o /tmp/argoexec.tar
+
+            docker save
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}} -o
+            /tmp/argocli.tar
+
+            docker load < /tmp/argoexec.tar
+
+            docker load < /tmp/argocli.tar
+
+            # Set up the hosts file
+
+            echo "Setting up the hosts file..."
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            # Install manifests
+
+            echo "Installing manifests..."
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Ensure that pods are running
+
+            echo "Checking that pods are running..."
+
+            kubectl get pods -n argo
+
+            # Build workflow controller
+
+            echo "Building workflow controller..."
+
+            make controller kit STATIC_FILES=false
+
+            # Build argo workflow CLI
+
+            echo "Building argo workflow CLI..."
+
+            make cli STATIC_FILES=false
+
+            # Start argo workflow controller & API
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
+            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true >
+            /tmp/argo.log 2>&1 &
+
+            # Wait for argo workflow controller to be ready
+
+            make wait PROFILE=mysql API=true  
+
+            # Run E2E tests for CLI
+
+            echo "Running E2E tests for CLI..."
+
+            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+        workingDir: /work/
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+    - name: approval
+      inputs:
+        parameters:
+          - name: approve
+            default: 'NO'
+            enum:
+              - 'YES'
+              - 'NO'
+            description: Choose YES to continue workflow and deploy to production
+      outputs:
+        parameters:
+          - name: approve
+            valueFrom:
+              supplied: {}
+      metadata: {}
+      suspend: {}
+    - name: docker-tag-push
+      inputs:
+        parameters:
+          - name: cli-image
+          - name: exec-image
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            apt-get update
+
+            # Install dependencies
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo
+
+            # Download and configure Docker
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            # Wait for Docker 
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            # Pull the CLI and exec images
+
+            echo "Pulling the CLI and exec images..."
+
+            docker pull
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker pull {{inputs.parameters.exec-image}}
+
+            # Tag and push images to docker hub
+
+            echo "Tagging and pushing the images to Docker Hub..."
+
+            docker images
+
+            docker tag {{inputs.parameters.cli-image}}
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker push
+            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          requests:
+            cpu: '3'
+            memory: 6Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+    - name: update-manifests
+      inputs:
+        parameters:
+          - name: image-name
+          - name: image-tag
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            apt-get update && apt-get install -y curl
+
+            curl -s
+            "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
+            | bash
+
+            mv kustomize /usr/local/bin/
+
+            kustomize version
+
+            cd manifests/base
+
+            kustomize edit set image
+            {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
+
+            # Ensure the kustomization.yaml is updated
+
+            kustomize build .
+
+            # Output the updated kustomization.yaml
+
+            cat kustomization.yaml
+        workingDir: /work
+        resources: {}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: commit-manifests
+      inputs:
+        parameters:
+          - name: commit-message
+          - name: name
+          - name: email
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: alpine/git:v2.26.2
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            git config --global user.email "{{inputs.parameters.email}}"
+
+            git config --global user.name "{{inputs.parameters.name}}"
+
+            git add -A 
+
+            git commit -m "{{inputs.parameters.commit-message}}" 
+
+            git push
+            https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git
+            HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
+        workingDir: /work
+        env:
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-token
+                key: token
+        resources: {}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: start-argocd-sync
+      inputs:
+        parameters:
+          - name: app-name
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: ubuntu:latest
+        command:
+          - sh
+          - '-c'
+        args:
+          - >
+            apt-get update && apt-get install -y curl sudo
+
+            curl -sSL -o argocd-linux-amd64
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+
+            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+
+            rm argocd-linux-amd64
+
+            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password
+            $ARGOCD_PASSWORD --insecure
+
+            argocd app sync {{inputs.parameters.app-name}}
+        env:
+          - name: ARGOCD_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: server
+          - name: ARGOCD_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: username
+          - name: ARGOCD_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: argocd-env-secret
+                key: password
+        resources: {}
+
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/konjo-open-src/argo-workflows # Repository URL
+      - name: branch
+        value: refs/heads/main # Branch name from the webhook payload (e.g., refs/heads/main, refs/heads/feature-branch)
+      - name: name
+        value: wesleyscholl # GitHub username
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com # GitHub email
+      - name: path
+        value: argo-workflows # Root path of the repository
+      - name: exec-path
+        value: argoexec # Path for Argo Exec
+      - name: cli-path 
+        value: argocli # Path for Argo CLI
+      - name: cli-image
+        value: wesmsl/argocli # Argo CLI image - docker hub username/repo
+      - name: exec-image
+        value: wesmsl/argoexec # Argo Exec image - docker hub username/repo
+      - name: tag 
+        value: v1 # Tag for the images
+  serviceAccountName: argo-workflow-sa # Service account name
+  volumeClaimTemplates: # Shared volume claim templates
+    - metadata:
+        name: work # Shared volume claim name
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce # Read-write access mode
+        resources:
+          requests:
+            storage: 15Gi # Storage size
+      status: {}
