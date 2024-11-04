@@ -1,5 +1,5 @@
 metadata:
-  name: ci-workflow
+  name: ci-cd-workflow
   namespace: argo
 spec:
   templates:
@@ -337,7 +337,7 @@ spec:
 
             echo "Pulling images from docker hub..."
 
-            docker pull {{inputs.parameters.exec-image}}
+            docker pull {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
 
             docker pull
             {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
@@ -372,7 +372,7 @@ spec:
 
             echo "Loading images into k3d cluster..."
 
-            docker save {{inputs.parameters.exec-image}} -o /tmp/argoexec.tar
+            docker save {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar
 
             docker save
             {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}} -o
@@ -443,46 +443,46 @@ spec:
             echo "Running E2E tests for CLI..."
 
             make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
-        workingDir: /work/
+        workingDir: /work/ # Working directory
         env:
-          - name: DOCKER_HOST
-            value: tcp://localhost:2375
+          - name: DOCKER_HOST 
+            value: tcp://localhost:2375 # Docker host URL
           - name: DOCKER_CONFIG
-            value: /.docker
-        resources:
+            value: /.docker # Docker config path
+        resources: # Adjust resources as needed
           requests:
             cpu: '3'
             memory: 6Gi
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
-          - name: docker-config
-            mountPath: /.docker
+          - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
+            mountPath: /.docker # Using this mount path
       volumes:
-        - name: docker-config
+        - name: docker-config # Ensure this volume is configured
           secret:
-            secretName: docker-config
-      sidecars:
+            secretName: docker-config # This secret holds the API key to your Docker registry
+      sidecars: # Docker dind sidecar
         - name: dind
           image: docker:20.10-dind
           env:
-            - name: DOCKER_TLS_CERTDIR
+            - name: DOCKER_TLS_CERTDIR # Docker TLS cert directory
           resources: {}
-          securityContext:
-            privileged: true
-          mirrorVolumeMounts: true
+          securityContext: # Security context
+            privileged: true # Privileged mode
+          mirrorVolumeMounts: true 
     - name: approval
       inputs:
         parameters:
           - name: approve
             default: 'NO'
-            enum:
-              - 'YES'
+            enum: 
+              - 'YES' # Approval options 
               - 'NO'
-            description: Choose YES to continue workflow and deploy to production
+            description: Choose YES to continue workflow and deploy to production # Approval description
       outputs:
         parameters:
-          - name: approve
+          - name: approve # Approval parameter
             valueFrom:
               supplied: {}
       metadata: {}
@@ -540,10 +540,9 @@ spec:
 
             echo "Pulling the CLI and exec images..."
 
-            docker pull
-            {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
 
-            docker pull {{inputs.parameters.exec-image}}
+            docker pull {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
 
             # Tag and push images to docker hub
 
@@ -554,34 +553,40 @@ spec:
             docker tag {{inputs.parameters.cli-image}}
             {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
 
+            docker tag {{inputs.parameters.exec-image}}
+            {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
+
             docker push
             {{inputs.parameters.cli-image}}:{{workflow.parameters.tag}}
+
+            docker push
+            {{inputs.parameters.exec-image}}:{{workflow.parameters.tag}}
         env:
           - name: DOCKER_HOST
-            value: tcp://localhost:2375
+            value: tcp://localhost:2375 # Docker host URL
           - name: DOCKER_CONFIG
-            value: /.docker
-        resources:
+            value: /.docker # Docker config path
+        resources: # Adjust resources as needed
           requests:
             cpu: '3'
             memory: 6Gi
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
-          - name: docker-config
-            mountPath: /.docker
-      volumes:
-        - name: docker-config
+          - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
+            mountPath: /.docker # Using this mount path
+      volumes: 
+        - name: docker-config # Ensure this volume is configured
           secret:
-            secretName: docker-config
-      sidecars:
+            secretName: docker-config # This secret holds the API key to your Docker registry
+      sidecars: # Docker dind sidecar
         - name: dind
           image: docker:20.10-dind
           env:
-            - name: DOCKER_TLS_CERTDIR
+            - name: DOCKER_TLS_CERTDIR # Docker TLS cert directory
           resources: {}
-          securityContext:
-            privileged: true
+          securityContext: # Security context
+            privileged: true # Privileged mode
           mirrorVolumeMounts: true
     - name: update-manifests
       inputs:
@@ -598,7 +603,11 @@ spec:
           - '-c'
         args:
           - >
+            # Install curl
+
             apt-get update && apt-get install -y curl
+
+            # Install kustomize
 
             curl -s
             "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
@@ -609,6 +618,8 @@ spec:
             kustomize version
 
             cd manifests/base
+
+            # Update the kustomization.yaml with the new image
 
             kustomize edit set image
             {{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}
@@ -641,26 +652,34 @@ spec:
           - '-c'
         args:
           - >
+            # Configure git user email and name
+
             git config --global user.email "{{inputs.parameters.email}}"
 
             git config --global user.name "{{inputs.parameters.name}}"
 
+            # Stage all changes
+
             git add -A 
 
+            # Commit changes
+
             git commit -m "{{inputs.parameters.commit-message}}" 
+
+            # Push changes to the repository
 
             git push
             https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git
             HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
-        workingDir: /work
-        env:
-          - name: GITHUB_TOKEN
+        workingDir: /work # Working directory
+        env: 
+          - name: GITHUB_TOKEN # GitHub token - Required for pushing changes to the repository
             valueFrom:
               secretKeyRef:
-                name: github-token
-                key: token
+                name: github-token # Secret name
+                key: token # Secret key
         resources: {}
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
     - name: start-argocd-sync
@@ -677,7 +696,11 @@ spec:
           - '-c'
         args:
           - >
+            # Install curl and sudo
+
             apt-get update && apt-get install -y curl sudo
+
+            # Download and install the Argo CD CLI
 
             curl -sSL -o argocd-linux-amd64
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
@@ -686,26 +709,28 @@ spec:
 
             rm argocd-linux-amd64
 
+            # Login to Argo CD and sync the application 
+
             argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password
             $ARGOCD_PASSWORD --insecure
 
             argocd app sync {{inputs.parameters.app-name}}
         env:
-          - name: ARGOCD_SERVER
+          - name: ARGOCD_SERVER # Argo CD server URL
             valueFrom:
               secretKeyRef:
-                name: argocd-env-secret
-                key: server
-          - name: ARGOCD_USERNAME
+                name: argocd-env-secret # Secret name
+                key: server # Secret key
+          - name: ARGOCD_USERNAME # Argo CD username - Required for login
             valueFrom:
               secretKeyRef:
-                name: argocd-env-secret
-                key: username
-          - name: ARGOCD_PASSWORD
+                name: argocd-env-secret # Secret name
+                key: username # Secret key
+          - name: ARGOCD_PASSWORD # Argo CD password - Required for login
             valueFrom:
               secretKeyRef:
-                name: argocd-env-secret
-                key: password
+                name: argocd-env-secret # Secret name
+                key: password # Secret key
         resources: {}
 
   entrypoint: main

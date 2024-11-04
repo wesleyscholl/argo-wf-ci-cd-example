@@ -239,14 +239,14 @@ spec:
 
             git push
             https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git
-            HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}} # Push to remote using GITHUB_TOKEN, repo and branch
+            HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
         workingDir: /work
         env:
-          - name: GITHUB_TOKEN # GitHub token
+          - name: GITHUB_TOKEN
             valueFrom:
-              secretKeyRef: # Secret for GitHub token
-                name: github-token # Secret name
-                key: token # Secret key
+              secretKeyRef:
+                name: github-token
+                key: token
         resources: {}
         volumeMounts:
           - name: work
