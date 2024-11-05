@@ -119,6 +119,10 @@ spec:
 
                     [ -f /work/dist/argo ] && echo 'Argo CLI build successful.'
                     || (echo 'Argo CLI build failed.' && exit 1) # Check if the build was successful
+
+                    # Cleanup all dependencies, temporary files, caches, node_modules, etc.
+
+                    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* node_modules
         - - name: create-exec-image
             template: create-image
             arguments:
@@ -331,6 +335,19 @@ spec:
         - name: docker-config # Ensure this volume is configured
           secret:
             secretName: docker-config # This secret holds the API key to your Docker registry
+    - name: cleanup-docker-builds
+      container:
+        image: alpine:latest
+        command: ['sh', '-c']
+        args:
+          - >
+            echo "Cleaning up Docker builds..."
+            
+            rm -rf /work/.docker /var/lib/docker 
+        workingDir: /work/ # Working directory
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work # Shared working volume
+            mountPath: /work
     - name: prepare-deploy-to-cluster-e2e-test
       inputs:
         parameters:
