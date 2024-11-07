@@ -148,3 +148,15 @@ This password must be only used for first time login. We strongly recommend you 
 ```
 
 ## Start Argo CD sync step
+
+---
+
+docs: Add CI/CD example for building Argo Workflows. Closes #8591
+
+This commit introduces a detailed example for implementing CI/CD pipelines to build Argo Workflows using Argo Workflows:
+
+- **CI**: Includes steps for initializing builds via webhook, building the CLI, using Buildkit for image builds, running tests, collecting coverage reports, deploying to a cluster, and executing basic E2E tests.
+- **CD**: Covers tagging, updating manifests with kustomize, committing updates, and initiating an Argo CD sync.
+- **Pipeline**: Integrates CI and CD jobs with an approval step.
+
+Signed-off-by: Wesley Scholl <wscholl@totalwine.com>

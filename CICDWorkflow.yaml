@@ -4,14 +4,13 @@
 # To run this workflow end-to-end, configure the following components.
 #
 
-# 1. GitHub Webhooks Configuration
-#
-# - Set up GitHub Webhooks: Follow this GitHub Webhooks guide: https://docs.github.com/en/webhooks/using-webhooks/creating-webhooks
-#
-
-# 2. WorkflowEventBinding
+# 1. WorkflowEventBinding
 #
 # - API Endpoint: `/api/v1/events/{namespace}/{discriminator}` to submit a `WorkflowTemplate` or `ClusterWorkflowTemplate`.
+#
+#   Example: curl -k https://localhost:2746/api/v1/events/argo/ \
+#                 -H "Authorization: $ARGO_TOKEN" \
+#                 -d '{"repository":{"html_url":"https://github.com/konjo-open-src/argo-workflows"}, "ref": "refs/heads/main", "pusher":{"name": "wesleyscholl","email":"128409641+wesleyscholl@users.noreply.github.com"}}'
 #
 # - Setup Guide: WorkflowEventBinding setup instructions can be found here: https://argo-workflows.readthedocs.io/en/latest/events/
 #
@@ -28,7 +27,7 @@
 # - Auth Token: Required in the `Authorization` header to trigger WorkflowEventBinding. Follow these steps to create an access token: https://argo-workflows.readthedocs.io/en/latest/access-token/
 #
 
-# 3. Docker Configuration
+# 2. Docker Configuration
 #
 # - Access Token for Docker Hub: Generate a personal access token at https://hub.docker.com/settings/security to publish Docker images.
 #
@@ -47,7 +46,7 @@
 #      kubectl create secret generic github-token --from-literal=token=<Your_GitHub_PAT> -n argo
 #
 
-# 4. Argo CD Configuration
+# 3. Argo CD Configuration
 #
 # - Install ArgoCD: Follow the ArgoCD installation guide at https://argo-cd.readthedocs.io/en/latest/getting_started/
 #
@@ -335,19 +334,6 @@ spec:
         - name: docker-config # Ensure this volume is configured
           secret:
             secretName: docker-config # This secret holds the API key to your Docker registry
-    - name: cleanup-docker-builds
-      container:
-        image: alpine:latest
-        command: ['sh', '-c']
-        args:
-          - >
-            echo "Cleaning up Docker builds..."
-            
-            rm -rf /work/.docker /var/lib/docker 
-        workingDir: /work/ # Working directory
-        volumeMounts: # Shared volume mounts between tasks
-          - name: work # Shared working volume
-            mountPath: /work
     - name: prepare-deploy-to-cluster-e2e-test
       inputs:
         parameters:
@@ -491,6 +477,8 @@ spec:
             docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar
 
             docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} -o /tmp/argocli.tar
+
+            set -eux
 
             docker load < /tmp/argoexec.tar
 

@@ -144,6 +144,62 @@ kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: argo-configmap-reader
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-configmap-binding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: argo-server
+    namespace: default
+roleRef:
+  kind: Role
+  name: argo-configmap-reader
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-controller-configmap
+  namespace: default
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-controller-configmap
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: argo
+  namespace: default
+roleRef:
+  kind: Role
+  name: argo-workflow-controller-configmap
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: argo-workflow-controller-configmap
   namespace: argo-workflows
 rules:
@@ -206,12 +262,11 @@ type: Opaque
 stringData:
   server: argocd-server.argocd.svc.cluster.local
   username: admin
-  password: Iwr5ub9ttIC850ea
+  password: t7c47p5yhZDpIDCK
 EOF
 
 
 # NetworkPolicy for ArgoCD
-
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -308,7 +363,7 @@ spec:
     selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != "" # To evaluate properties and values within the payload
   submit:
     workflowTemplateRef:
-      name: ci-workflow # Name of the WorkflowTemplate to trigger
+      name: ci-cd-workflow # Name of the WorkflowTemplate to trigger
     arguments:
       parameters: # Parameters to pass to the WorkflowTemplate
         - name: repo
@@ -323,4 +378,30 @@ spec:
         - name: email
           valueFrom:
             event: payload.pusher.email # GitHub user email
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: submit-workflow-template
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workfloweventbindings
+    verbs:
+      - list
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflowtemplates
+    verbs:
+      - get
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflows
+    verbs:
+      - create
 EOF
