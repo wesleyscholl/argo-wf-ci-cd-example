@@ -1,7 +1,7 @@
 | CI                                           | Status |
 |----------------------------------------------|--------|
-| `WorkflowEventBinding`                       | - [x] test|
-| `WorkflowTemplate` - Build the CLI.          | [x]    |
+| `WorkflowEventBinding`                       | ☑️|
+| `WorkflowTemplate` - Build the CLI.          |  ✅   |
 | `WorkflowTemplate` - Build images using Buildkit - Pushes image to Docker Hub | [x] |
 | `WorkflowTemplate` - Run unit tests and collect test report. | [x] |
 | `WorkflowTemplate` - Run coverage and collect report. | [x] |
