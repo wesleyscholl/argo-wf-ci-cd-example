@@ -1,0 +1,77 @@
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: github.com
+  namespace: argo
+EOF
+---
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github.com.service-account-token
+  namespace: argo
+  annotations:
+    kubernetes.io/service-account.name: github.com
+type: kubernetes.io/service-account-token
+EOF
+---
+ARGO_TOKEN="Bearer $(kubectl get secret github.com.service-account-token -o=jsonpath='{.data.token}' | base64 --decode)"
+echo $ARGO_TOKEN
+---
+
+kubectl apply -f - <<EOF
+kind: Secret
+apiVersion: v1
+metadata:
+  name: argo-workflows-webhook-clients
+  namespace: argo
+stringData:
+  github.com: |
+    type: github
+    secret: "Bearer ey..."
+EOF
+---
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: submit-workflow-template
+  namespace: argo
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workfloweventbindings
+    verbs:
+      - list
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflowtemplates
+    verbs:
+      - get
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflows
+    verbs:
+      - create
+EOF
+---
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: github.com
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: submit-workflow-template
+subjects:
+  - kind: ServiceAccount
+    name: github.com
+    namespace: argo
+EOF
