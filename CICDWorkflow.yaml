@@ -70,7 +70,10 @@
 #        password: abc..........xyz # Admin password
 #
 #   - Network Policy Traffic Configuration: Create a `NetworkPolicy` to allow traffic from the Argo namespace to the ArgoCD namespace for `argocd-server`.
+#
 
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
 metadata:
   name: ci-cd-workflow
   namespace: argo
@@ -434,17 +437,7 @@ spec:
 
             make install PROFILE=minimal STATIC_FILES=false
 
-            echo "Building workflow controller..."
-
-            make controller kit STATIC_FILES=false
-
-            echo "Checking that pods are running..."
-
             kubectl get pods -n argo
-
-            echo "Building workflow controller..."
-
-            make controller kit STATIC_FILES=false
 
             echo "Starting argo workflow controller & API..."
 
