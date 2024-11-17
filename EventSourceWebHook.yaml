@@ -1,15 +1,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: EventSource
 metadata:
-  name: webhook 
-  namespace: argo-events 
+  name: github-push-webhook # Event Source Name
+  namespace: argo-events # Namespace
 spec:
-  service: 
+  service:
     ports:
       - port: 12000 # Configuring the service port to 12000
         targetPort: 12000 # Configuring the service target port to 12000
   webhook:
-    example: # Name of webhook event
-      endpoint: /example # Endpoint url suffix
-      method: POST # HTTP Method - POST to send request data 
+    github: # Name of webhook event
+      endpoint: /github # Endpoint url suffix
+      method: POST # HTTP Method - POST to send request data
       port: "12000" # Assigning the port for the webhook

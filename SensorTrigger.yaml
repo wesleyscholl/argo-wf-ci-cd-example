@@ -1,19 +1,19 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Sensor
 metadata:
-  name: webhook
-  namespace: argo-events # Ensure namespaces match
+  name: github-push-workflow-sensor # Sensor Name
+  namespace: argo-events # Namespace
 spec:
   dependencies:
-    - name: test-dep # Dependency for the sensor
-      eventSourceName: webhook # Event Source
-      eventName: example # Name of the webhook event
+    - name: github-webhook # Event source dependency for the sensor
+      eventSourceName: github-push-webhook # Event Source Name
+      eventName: github # Name of the webhook event
   triggers:
     - template:
         name: webhook-workflow-trigger # Trigger Name
         k8s:
           source:
-            resource: # Specifying the resource
+            resource: # Specifying the resource to trigger
               apiVersion: argoproj.io/v1alpha1
               kind: Workflow
               metadata:
@@ -30,20 +30,63 @@ spec:
           operation: create # Creates the workflow when triggered
           parameters:
             - src:
-                dependencyName: test-dep # Dependency name
-                dataKey: body.repository.html_url # Selector for request body data (Repo url)
+                dependencyName: github-webhook # Event source dependency
+                dataKey: body.repository.html_url # Selector for request body data (GitHub repo url)
               dest: spec.arguments.parameters.0.value # Destination for data selection
             - src:
-                dependencyName: test-dep
-                dataKey: body.ref # (Branch)
+                dependencyName: github-webhook
+                dataKey: body.ref # (GitHub branch)
               dest: spec.arguments.parameters.1.value
             - src:
-                dependencyName: test-dep
-                dataKey: body.pusher.name # (User name)
+                dependencyName: github-webhook
+                dataKey: body.pusher.name # (GitHub user name)
               dest: spec.arguments.parameters.2.value
             - src:
-                dependencyName: test-dep
-                dataKey: body.pusher.email # (User email)
+                dependencyName: github-webhook
+                dataKey: body.pusher.email # (GitHub user email)
               dest: spec.arguments.parameters.3.value
   template:
     serviceAccountName: operate-workflow-sa # Service account to use - Required to create workflows
+
+---
+# Example of a WorkflowTemplate trigger in a Sensor, triggered by a GitHub webhook event. The WorkflowTemplate is triggered when a push event is received from a GitHub repository. The WorkflowTemplate is passed parameters from the webhook event payload, including the repository URL, branch, user name, and email address.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: github-push-workflow-sensor # Sensor Name
+  namespace: argo-events # Namespace
+spec:
+  dependencies:
+    - name: github-webhook # Event source dependency for the sensor
+      eventSourceName: github-push-webhook # Event Source Name
+      eventName: github # Name of the webhook event
+  triggers:
+    - template:
+        name: webhook-workflow-trigger # Trigger Name
+        argoWorkflow:
+          source:
+            resource: # Specifying the resource to trigger
+              apiVersion: argoproj.io/v1alpha1
+              kind: WorkflowTemplate # Specifying the kind
+              metadata:
+                name: ci-workflow # Name of the WorkflowTemplate
+          operation: submit # Submits the WorkflowTemplate when triggered
+          parameters:
+            - src:
+                dependencyName: github-webhook # Event source dependency
+                dataKey: body.repository.html_url # Selector for request body data (GitHub repo url)
+              dest: spec.arguments.parameters.0.value # Destination for data selection
+            - src:
+                dependencyName: github-webhook
+                dataKey: body.ref # (GitHub branch)
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: github-webhook
+                dataKey: body.pusher.name # (GitHub user name)
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: github-webhook
+                dataKey: body.pusher.email # (GitHub user email)
+              dest: spec.arguments.parameters.3.value
+  template:
+    serviceAccountName: operate-workflow-sa # Service account - Required to submit workflows

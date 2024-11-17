@@ -1,3 +1,5 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
 metadata:
   name: ci-workflow
   namespace: argo
@@ -13,9 +15,9 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: '{{workflow.parameters.repo}}'
+                  value: "{{workflow.parameters.repo}}"
                 - name: branch
-                  value: '{{workflow.parameters.branch}}'
+                  value: "{{workflow.parameters.branch}}"
         - - name: build-cli
             template: golang-task
             arguments:
@@ -43,21 +45,21 @@ spec:
             arguments:
               parameters:
                 - name: path
-                  value: '{{workflow.parameters.path}}'
+                  value: "{{workflow.parameters.path}}"
                 - name: image
-                  value: '{{workflow.parameters.exec-image}}'
+                  value: "{{workflow.parameters.exec-image}}"
                 - name: tag
-                  value: '{{workflow.parameters.tag}}'
+                  value: "{{workflow.parameters.tag}}"
         - - name: create-cli-image
             template: create-image
             arguments:
               parameters:
                 - name: path
-                  value: '{{workflow.parameters.path}}'
+                  value: "{{workflow.parameters.path}}"
                 - name: image
-                  value: '{{workflow.parameters.cli-image}}'
+                  value: "{{workflow.parameters.cli-image}}"
                 - name: tag
-                  value: '{{workflow.parameters.tag}}'
+                  value: "{{workflow.parameters.tag}}"
         - - name: run-tests
             template: golang-task
             arguments:
@@ -93,21 +95,21 @@ spec:
       outputs: {}
       metadata: {}
       container:
-        name: ''
+        name: ""
         image: alpine/git:v2.26.2
         args:
           - clone
-          - '--depth'
-          - '1' # Shallow clone
-          - '--branch'
-          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch 
-          - '--single-branch'
-          - '{{inputs.parameters.repo}}' # https://github.com/argoproj/argo-workflows
+          - "--depth"
+          - "1" # Shallow clone
+          - "--branch"
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch
+          - "--single-branch"
+          - "{{inputs.parameters.repo}}" # https://github.com/argoproj/argo-workflows
           - .
         workingDir: /work # Working directory
         resources: # Adjust resources as needed
           requests:
-            cpu: '1'
+            cpu: "1"
             memory: 2Gi
         volumeMounts: # Shared volume mounts between tasks
           - name: work
@@ -119,20 +121,20 @@ spec:
       outputs: {}
       metadata: {}
       container:
-        name: ''
+        name: ""
         image: golang:1.23
         command:
           - /bin/sh
-          - '-c'
+          - "-c"
         args:
-          - '{{inputs.parameters.commands}}' # Parameterized commands
+          - "{{inputs.parameters.commands}}" # Parameterized commands
         workingDir: /work/ # Working directory
         env:
           - name: GO111MODULE
-            value: 'on' # Enable Go modules
+            value: "on" # Enable Go modules
         resources: # Adjust resources as needed
           requests:
-            cpu: '2'
+            cpu: "2"
             memory: 4Gi
         volumeMounts: # Shared volume mounts between tasks
           - name: work
@@ -146,45 +148,45 @@ spec:
       outputs: {}
       metadata: {}
       container:
-        name: ''
+        name: ""
         image: moby/buildkit:v0.9.3-rootless
         command:
           - buildctl-daemonless.sh
         args:
           - build
-          - '--frontend' 
-          - dockerfile.v0 
-          - '--local'
+          - "--frontend"
+          - dockerfile.v0
+          - "--local"
           - context=. # Context path
-          - '--local'
+          - "--local"
           - dockerfile=. # Dockerfile path
-          - '--output'
+          - "--output"
           - >-
             type=image,name={{inputs.parameters.image}}:{{inputs.parameters.tag}},push=true # Creates image with tag and pushes to registry
-          - '--opt'
+          - "--opt"
           - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
         workingDir: /work/ # Working directory
         env:
           - name: BUILDKITD_FLAGS # Disable process sandbox
-            value: '--oci-worker-no-process-sandbox' 
+            value: "--oci-worker-no-process-sandbox"
           - name: DOCKER_CONFIG # Pass in the docker config as an environment variable
             value: /.docker
         resources: # Adjust as needed
           requests:
-            cpu: '3'
+            cpu: "3"
             memory: 6Gi
         volumeMounts: # Shared volume mounts between tasks
           - name: work # Shared working volume
             mountPath: /work
           - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
             mountPath: /.docker # Using this mount path
-        readinessProbe: 
-          exec: 
-            command: 
+        readinessProbe:
+          exec:
+            command:
               - sh
-              - '-c'
+              - "-c"
               - buildctl debug workers # Check if the buildkit workers are running
-      volumes: 
+      volumes:
         - name: docker-config # Ensure this volume is configured
           secret:
             secretName: docker-config # This secret holds the API key to your Docker registry
@@ -203,13 +205,13 @@ spec:
         value: argo-workflows # Root path of the repository
       - name: exec-path
         value: argoexec # Path for Argo Exec
-      - name: cli-path 
+      - name: cli-path
         value: argocli # Path for Argo CLI
       - name: cli-image
         value: wesmsl/argocli # Argo CLI image - docker hub username/repo
       - name: exec-image
         value: wesmsl/argoexec # Argo Exec image - docker hub username/repo
-      - name: tag 
+      - name: tag
         value: v1 # Tag for the images
   serviceAccountName: argo-workflow-sa # Service account name
   volumeClaimTemplates: # Shared volume claim templates
