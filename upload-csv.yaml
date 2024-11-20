@@ -93,3 +93,18 @@ spec:
   volumes:
     - name: temp-volume # Volume name
       emptyDir: {} # Use emptyDir for temporary storage
+
+---
+
+kubectl apply -f - <<EOF           
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sftp-conn # Secret name
+  namespace: argo
+type: Opaque 
+data: 
+  username: $(echo -n "<SFTP_USER>" | base64) # Base64 encoded SFTP username
+  password: $(echo -n "<SFTP_PASS>" | base64) # Base64 encoded SFTP password
+  host: $(echo -n "<SFTP_HOST>" | base64) # Base64 encoded SFTP host
+EOF
