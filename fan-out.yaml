@@ -1,0 +1,115 @@
+metadata:
+  name: fan-out
+  namespace: argo
+  uid: e3a0f933-852e-4df0-84ba-f7af00fbd07e
+  resourceVersion: "66785"
+  generation: 1
+  creationTimestamp: "2024-07-31T02:31:58Z"
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-07-31T02:31:58Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: fan-out-in-params-workflow
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: generate
+            template: generate-artifacts
+            arguments: {}
+        - - name: fan-out-print
+            template: fan-out-print
+            arguments:
+              parameters:
+                - name: text
+                  value: "{{item}}"
+              artifacts:
+                - name: input
+                  from: "{{steps.generate.outputs.artifacts.fan-out-artifacts}}"
+                  subPath: "{{item}}"
+            withParam: "{{steps.generate.outputs.result}}"
+        - - name: fan-in
+            template: fan-in
+            arguments: {}
+    - name: generate-artifacts
+      inputs: {}
+      outputs:
+        artifacts:
+          - name: fan-out-artifacts
+            path: /tmp/
+            s3:
+              key: fanout-{{workflow.name}}/
+            archive:
+              none: {}
+      metadata: {}
+      script:
+        name: ""
+        image: python:alpine3.6
+        command:
+          - python
+        resources: {}
+        source: |
+          import json
+          import sys
+          import os
+          files = []
+          for i in range(1, 101):
+            filename = f'file{i}.txt'
+            files.append(filename)
+            with open(os.path.join('tmp', filename), 'w') as f:
+              f.write(f'hello {i}')
+          # Writing a JSON-compliant array of filenames to the output
+          grouped_files = [files[i:i + 20] for i in range(0, len(files), 20)]
+          json.dump(grouped_files, sys.stdout)
+    - name: fan-out-print
+      inputs:
+        parameters:
+          - name: text
+        artifacts:
+          - name: input
+            path: /tmp/input
+      outputs: {}
+      metadata: {}
+      script:
+        name: ""
+        image: python:alpine3.6
+        command:
+          - python
+        resources: {}
+        source: |
+          param = "{{inputs.parameters.text}}"
+          with open('/tmp/input', 'r') as f:
+            filecont = f.read()
+          print(f'Param: {param}, file: {filecont}')
+    - name: fan-in
+      inputs:
+        artifacts:
+          - name: artifact-files
+            path: /tmp
+            s3:
+              key: fanout-{{workflow.name}}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine:latest
+        command:
+          - sh
+          - "-c"
+        args:
+          - ls /tmp
+        resources: {}
+  entrypoint: fan-out-in-params-workflow
+  arguments: {}

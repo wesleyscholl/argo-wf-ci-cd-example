@@ -1,0 +1,53 @@
+Node and `sh` handles special characters differently typcially requiring escaping or template literals to handle special characters. Other images like Ubuntu or Alpine which utilize `bash` or `ash` do not require escaping for special characters. Node's shell is more minimalistic with fewer capabilities in comparison to `bash` or `ash`, especially when it comes to handling special characters in strings.
+
+Here is a basic functional example using Ubuntu:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: prepare-files-on-volume
+  namespace: argo-workflows
+spec:
+  templates:
+    - name: prepare-files-on-volume
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      script:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - bash
+          - "-c"
+        resources: {}
+        volumeMounts:
+          - name: workdir
+            mountPath: /mnt/app
+        source: >
+          #!/bin/bash
+
+          echo "First file including special characters: \$ \` \"
+          ' \\ # & * ( ) < > ~ | { } [] ; :" > /mnt/app/file1.js
+
+
+          echo "Second file with: @ % ^ + = ? !, special character patterns:
+          {{ }} [[ ]] \\$\\#\\* - \`~!@#\$%^&*()_-+={[}]|\\:;\"'<,>.?/ and
+          Unicode: ✅ 🚀 ⚙️ ☑️ 😄" > /mnt/app/file2.js
+
+
+          cat /mnt/app/file1.js /mnt/app/file2.js
+
+          ls /mnt/app
+  entrypoint: prepare-files-on-volume
+  arguments: {}
+  volumes:
+    - name: workdir
+      emptyDir: {}
+```
+
+References:
+
+https://www.oreilly.com/library/view/learning-the-bash/1565923472/ch01s09.html
+https://tldp.org/LDP/abs/html/special-chars.html
+https://www.gnu.org/software/bash/manual/html_node/Double-Quotes.html

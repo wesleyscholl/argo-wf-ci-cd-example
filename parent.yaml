@@ -1,0 +1,38 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: parent-workflow
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      steps:
+        - - name: parent-task
+            template: parent-task
+    - name: parent-task
+      container:
+        name: ""
+        image: python:3.9
+        command:
+          - python
+          - "-c"
+        args:
+          - |
+            import random
+            import sys
+
+            # 50% chance to fail
+            if random.random() < 0.5:
+                print("Simulating failure: Random fail triggered!")
+                sys.exit(1)  # Exit with failure
+            else:
+                print("Hello from Parent Workflow!")
+    - name: exit-handler
+      steps:
+        - - name: launch-child
+            templateRef:
+              name: child-workflow
+              template: main
+            when: "{{workflow.status}} == Succeeded" # Child workflow will only run if parent workflow is successful
+  entrypoint: main
+  onExit: exit-handler

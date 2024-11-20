@@ -1,0 +1,132 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: pvc-status-check
+  namespace: argo
+spec:
+  templates:
+    - name: check-pvc-status
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      script:
+        name: ""
+        image: bitnami/kubectl:latest
+        command:
+          - bash
+        resources: {}
+        source: |
+          # Get PVC name dynamically
+          PVC_NAME=$(kubectl get pvc | grep status-check-pvc | awk '{print $1}')
+          echo "PVC Name: $PVC_NAME"
+          # Fetch full PVC status details
+          echo "PersistentVolumeClaimStatus:"
+          kubectl get pvc $PVC_NAME -o jsonpath='{.status}' | jq .
+  entrypoint: check-pvc-status
+  arguments: {}
+  serviceAccountName: argo-workflow-sa
+  volumeClaimTemplates:
+    - metadata:
+        name: status-check-pvc
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+      status: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pvc-status-role
+  namespace: argo
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pvc-status-rolebinding
+  namespace: argo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pvc-status-role
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo
+---
+metadata:
+  name: json-to-raw-simple
+  namespace: argo
+  uid: 811f306c-b85d-4c0f-bc1a-53a2de035cbd
+  resourceVersion: "206724"
+  generation: 19
+  creationTimestamp: "2024-11-18T19:47:53Z"
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-11-18T20:56:20Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs:
+        parameters:
+          - name: message
+            value: "{{workflow.parameters.message}}"
+      outputs:
+        parameters:
+          - name: data
+            valueFrom:
+              path: /tmp/output.txt
+      metadata: {}
+      script:
+        name: ""
+        image: alpine
+        command:
+          - sh
+          - "-c"
+        args:
+          - >
+            echo "Processing with tr:" echo
+            "{{=jsonpath(inputs.parameters.message, '$.data.files[*].name')}}" |
+            tr -d '[]' | tr ' ' '\n' > /tmp/output.txt
+
+            cat /tmp/output.txt
+        resources: {}
+        source: ""
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: message
+        value: |
+          {
+            "data": {
+              "files": [
+                {
+                  "name": "path/to/file1",
+                  "size": 23
+                },
+                {
+                  "name": "path/to/file2",
+                  "size": 42
+                }
+              ]
+            }
+          }
+  serviceAccountName: argo-workflow-sa

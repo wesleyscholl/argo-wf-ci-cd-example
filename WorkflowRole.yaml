@@ -17,7 +17,34 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
 EOF
+---
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pvc-status-role
+  namespace: argo
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+EOF
 
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pvc-status-rolebinding
+  namespace: argo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pvc-status-role
+subjects:
+- kind: ServiceAccount
+  name: argo-workflow-sa
+  namespace: argo
+EOF
 ---
 # Service Account
 kubectl apply -f - <<EOF
@@ -63,6 +90,36 @@ subjects:
     name: argo-workflow-sa # Reference the service account
     namespace: argo # Reference the namespace
 EOF
+
+---
+
+# Get PVC name dynamically
+
+    PVC_NAME=$(kubectl get pvc | grep status-check-pvc | awk '{print $1}')
+
+    # Fetch full PVC status details
+
+    echo "PVC Name: $PVC_NAME"
+
+    echo "PersistentVolumeClaimStatus:"
+
+    kubectl get pvc $PVC_NAME -o jsonpath='{.status}' | jq .
+
+    # Extract and print specific status fields
+
+    PHASE=$(kubectl get pvc $PVC_NAME -o jsonpath='{.status.phase}')
+
+    CAPACITY=$(kubectl get pvc $PVC_NAME -o
+    jsonpath='{.status.capacity.storage}')
+
+    ACCESS_MODES=$(kubectl get pvc $PVC_NAME -o
+    jsonpath='{.status.accessModes}')
+
+    echo "PVC Phase: $PHASE"
+
+    echo "Allocated Capacity: $CAPACITY"
+
+    echo "Access Modes: $ACCESS_MODES"
 
 ---
 # ArgoCD
