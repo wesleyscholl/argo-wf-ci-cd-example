@@ -37,21 +37,16 @@ kind: Workflow
 metadata:
   generateName: http-artifact-example-
 spec:
-  entrypoint: main
-  templates:
-    - name: main
-      steps:
-        - - name: download-artifact
-            template: http-artifact
-
-    - name: http-artifact
+  entrypoint: download-http-artifact
+  templates:            
+    - name: download-http-artifact
       inputs:
         artifacts:
           - name: sample-text
             path: /tmp/sample.txt
             mode: 0644
             http:
-              url: https://raw.githubusercontent.com/argoproj/argo-workflows/master/examples/README.md
+              url: https://raw.githubusercontent.com/argoproj/argo-workflows/refs/heads/main/README.md
       container:
         image: alpine:3.14
         command: [sh, -c]
