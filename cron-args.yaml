@@ -1,0 +1,101 @@
+Passing arguments to argo cronWorkflows #11290
+
+Hey there,
+I get the idea behind not be able to pass arguments to cron workflows...
+But some of my use cases requires this feature...
+I've searched a lot for work around but found nothing...is there a work around that i have missed?
+or is there any planning to add this feature in the near future?
+thanks!
+
+Example of passing arguments to cron workflows via secrets and configmaps:
+
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: cron-args
+spec:
+  schedule: "*/2 * * * *"
+  workflowSpec:
+    entrypoint: main
+    templates:
+      - name: main
+        template: process
+        arguments:
+          parameters:
+            - name: secret-message
+              valueFrom:
+                secretKeyRef:
+                  name: my-secret
+                  key: message
+            - name: configmap-message
+              valueFrom:
+                configMapKeyRef:
+                  name: my-configmap
+                  key: message
+      - name: process
+        inputs:
+          parameters:
+            - name: message
+        container:
+          image: alpine:3.7
+          command: [sh, -c]
+          args: ["echo {{inputs.parameters.secret-message}} - {{inputs.parameters.configmap-message}}"]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+stringData:
+  message: "Secret message"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-configmap
+data:
+  message: "ConfigMap message"
+
+
+Example of passing arguments (updating values) to cron workflows using the resource template:
+
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: cron-resource-args
+spec:
+  schedule: "*/2 * * * *"
+  workflowSpec:
+    entrypoint: main
+    templates:
+      - name: main
+        template: process
+        resource:
+          action: update
+          manifest: |
+            apiVersion: argoproj.io/v1alpha1
+            kind: Workflow
+            metadata:
+              generateName: cron-resource-args-
+            spec:
+              entrypoint: main
+              arguments:
+                parameters:
+                  - name: message
+                    value: "Updated message"
+              templates:
+                - name: main
+                  inputs:
+                    parameters:
+                      - name: message
+                  container:
+                    image: alpine:3.7
+                    command: [sh, -c]
+                    args: ["echo {{inputs.parameters.message}}"]
+      - name: process
+        inputs:
+          parameters:
+            - name: message
+        container:
+          image: alpine:3.7
+          command: [sh, -c]
+          args: ["echo {{inputs.parameters.message}}"]

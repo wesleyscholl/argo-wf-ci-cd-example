@@ -1,0 +1,32 @@
+The `parameters`, `src`, `dependencyName`, `dataKey` and `dest` need to be specified within `k8s`. These source and destination parameters map the dependency payload to the workflow parameters.
+
+```yaml
+k8s:
+  operation: create
+  source:
+    resource:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Workflow
+      metadata:
+        generateName: aws-sqs-workflow-
+      spec:
+        serviceAccountName: argo-sa
+        entrypoint: whalesay
+        arguments:
+          parameters:
+            - name: date
+        templates:
+          - name: whalesay
+            inputs:
+              parameters:
+                - name: message
+            container:
+              image: docker/whalesay:latest
+              command: [cowsay]
+              args: ["{{inputs.parameters.date}}"]
+  parameters: # Parameters to pass to the Workflow
+    - src: # Source of the data
+        dependencyName: dependency-abc # Event source dependency
+        dataKey: date # Selector for payload data (date)
+      dest: spec.arguments.parameters.0.value # Destination for data selection (first parameter - date)
+```

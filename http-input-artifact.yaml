@@ -1,0 +1,64 @@
+@egze 
+
+The http template doesn't currently support artifact outputs.
+
+- https://argo-workflows.readthedocs.io/en/latest/http-template/
+- https://argo-workflows.readthedocs.io/en/latest/fields/#http
+
+However, you could accomplish the same thing using the http input artifact:
+
+```yaml
+# Example of using a hard-wired artifact location from a HTTP URL.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: input-artifact-http-
+spec:
+  entrypoint: http-artifact-example
+  templates:
+  - name: http-artifact-example
+    inputs:
+      artifacts:
+      - name: kubectl
+        path: /bin/kubectl
+        mode: 0755
+        http:
+          url: https://storage.googleapis.com/kubernetes-release/release/v1.8.0/bin/linux/amd64/kubectl
+    container:
+      image: debian:9.4
+      command: [sh, -c]
+      args: ["kubectl version"]
+```
+https://github.com/argoproj/argo-workflows/blob/main/examples/input-artifact-http.yaml
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: http-artifact-example-
+spec:
+  entrypoint: main
+  templates:
+    - name: main
+      steps:
+        - - name: download-artifact
+            template: http-artifact
+
+    - name: http-artifact
+      inputs:
+        artifacts:
+          - name: sample-text
+            path: /tmp/sample.txt
+            mode: 0644
+            http:
+              url: https://raw.githubusercontent.com/argoproj/argo-workflows/master/examples/README.md
+      container:
+        image: alpine:3.14
+        command: [sh, -c]
+        args:
+          - |
+            echo "Contents of the downloaded file:"
+            cat /tmp/sample.txt
+            echo "File size:"
+            wc -c /tmp/sample.txt
+```
