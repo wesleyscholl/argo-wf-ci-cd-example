@@ -1,0 +1,27 @@
+@chuksdsilent 
+
+The `url` and `bucket-name` parameters need to be passed into `git-clone`:
+
+```yaml
+spec:
+  entrypoint: git-clone
+  arguments:
+    parameters:
+      - name: url
+        value: ""
+      - name: bucket-name
+        value: ""
+  templates:
+    - name: git-clone
+      inputs:
+        parameters:
+          - name: url
+          - name: bucket-name
+        artifacts:
+          - name: argo-source
+            path: /src
+            git:
+              repo: "{{inputs.parameters.url}}"
+```
+
+Then they are accessible for use within the `git-clone` template.

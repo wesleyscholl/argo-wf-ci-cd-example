@@ -1,0 +1,14 @@
+@terrytangyuan 
+
+The example is a bit long, but it includes all the requirements from #8591. Would be it easier to maintain if it was split into separate CI and CD `WorkflowTemplates`? Then link them in the docs.
+
+@Joibel 
+
+Thanks for reviewing, this is the first CI/CD pipeline I've ever built. I want to modify this example to make it fully functional. For instance, adding this line to build the controller:
+
+```shell
+make controller kit STATIC_FILES=false
+```
+The workflow can implement a DAG to run all of the e2e tests in parallel and use the `argo-cli` build in the e2e tests.
+
+As for the scope and caveats, should more comments be added to the example to explain each step in the workflow?

@@ -1,0 +1,110 @@
+metadata:
+  name: dag-ci-cd-workflow
+  namespace: argo
+spec:
+  templates:
+    - name: e2e-tests
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: print-matrix-object
+            template: print-matrix-object
+            arguments:
+              parameters:
+                - name: matrix-object
+                  value: "{{item}}"
+            withParam: "{{workflow.parameters.test-matrix}}"
+    - name: print-matrix-object
+      inputs:
+        parameters:
+          - name: matrix-object
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - sh
+          - "-c"
+        args:
+          - |
+            echo "Processing matrix object: {{inputs.parameters.matrix-object}}"
+        resources: {}
+  entrypoint: e2e-tests
+  arguments:
+    parameters:
+      - name: test-matrix
+        value: |
+          [
+            {
+              "test": "test-executor",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-api",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cli",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cron",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-examples",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-plugins",
+              "profile": "plugins",
+              "use-api": false
+            },
+            {
+              "test": "test-java-sdk",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-python-sdk",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-executor",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            }
+          ]
+  serviceAccountName: argo-workflow-sa

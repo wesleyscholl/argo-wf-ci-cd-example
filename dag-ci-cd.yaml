@@ -1,0 +1,249 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: dag-ci-cd-workflow
+  namespace: argo
+spec:
+  arguments:
+    parameters:
+      - name: test-matrix
+        value: |
+          [
+            {
+              "test": "test-executor",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-api",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cli",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cron",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-examples",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-plugins",
+              "profile": "plugins",
+              "use-api": false
+            },
+            {
+              "test": "test-java-sdk",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-python-sdk",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-executor",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3s_version": "v1.28.13+k3s1",
+              "profile": "minimal",
+              "use-api": false
+            }
+          ]
+
+  templates:
+    # ... (clone-repo, golang-step, create-image templates remain the same) ...
+    - name: e2e-tests
+      dag:
+        tasks:
+          - name: setup-k3s
+            template: setup-k3s
+            dependencies: []
+
+          - name: download-images
+            template: download-images
+            arguments:
+              parameters:
+                - name: image-names
+                  value: argoexec,argocli
+            dependencies: [setup-k3s]
+
+          - name: load-images
+            template: load-images
+            dependencies: [download-images]
+
+          - name: setup-hosts
+            template: setup-hosts
+            dependencies: [setup-k3s]
+
+          - name: install-manifests
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: make install PROFILE={{item.profile}} STATIC_FILES=false
+            dependencies: [setup-k3s, load-images]
+
+          - name: build-controller
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: make controller kit STATIC_FILES=false
+            dependencies: [setup-k3s, load-images]
+
+          - name: build-cli
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: make cli STATIC_FILES=false
+            dependencies: [setup-k3s, load-images]
+
+          - name: start-controller-api
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: >
+                    make start PROFILE={{item.profile}} \
+                      AUTH_MODE=client STATIC_FILES=false \
+                      LOG_LEVEL=info \
+                      API={{item.use-api}} \
+                      UI=false \
+                      POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+            dependencies: [install-manifests, build-controller, build-cli]
+
+          - name: wait-for-controller
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: make wait PROFILE={{item.profile}} API={{item.use-api}}
+            dependencies: [start-controller-api]
+
+          - name: run-e2e-tests
+            template: run-command
+            arguments:
+              parameters:
+                - name: command
+                  value: make {{item.test}} E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            withItems: "{{workflow.parameters.test-matrix}}"
+            dependencies: [wait-for-controller]
+
+    - name: setup-k3s
+      container:
+        image: ubuntu:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            if ! echo "${{item.install_k3s_version}}" | egrep '^v[0-9]+\.[0-9]+\.[0-9]+\+k3s1$'; then
+              export INSTALL_K3S_VERSION=v1.31.0+k3s1
+            else
+              export INSTALL_K3S_VERSION=${{item.install_k3s_version}}
+            fi
+            curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable \
+              INSTALL_K3S_EXEC="--docker --kubelet-arg=config=/work/test/e2e/manifests/kubelet-configuration.yaml" \
+              K3S_KUBECONFIG_MODE=644 \
+              sh -
+            until kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml cluster-info ; do sleep 10s ; done
+            cp /etc/rancher/k3s/k3s.yaml /work/.kubeconfig
+            echo "- name: fake_token_user" >> /work/.kubeconfig
+            echo "  user:" >> /work/.kubeconfig
+            echo "    token: xxxxxx" >> /work/.kubeconfig
+            until kubectl cluster-info ; do sleep 10s ; done
+      withItems: "{{inputs.parameters.test-matrix}}"
+      volumeMounts:
+        - name: work
+          mountPath: /work
+
+    - name: download-images
+      container:
+        image: ubuntu:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -eux
+            for image in $(echo "{{inputs.parameters.image-names}}" | tr ',' '\n'); do
+              echo "Downloading image $image"
+              wget -O /tmp/$image\_image.tar "https://api.github.com/repos/argoproj/argo-workflows/actions/artifacts/${{secrets.ARTIFACT_ID}}/zip"
+              unzip /tmp/$image\_image.tar -d /tmp
+            done
+
+    - name: load-images
+      container:
+        image: ubuntu:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -eux
+            for image in $(echo "{{inputs.parameters.image-names}}" | tr ',' '\n'); do
+              echo "Loading image $image"
+              docker load < /tmp/$image\_image.tar/$image\_image.tar
+            done
+
+    - name: setup-hosts
+      container:
+        image: ubuntu:latest
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+    - name: run-command
+      inputs:
+        parameters:
+          - name: command
+      container:
+        image: ubuntu:latest
+        command: ["sh", "-c"]
+        args: ["{{inputs.parameters.command}}"]
+      volumeMounts:
+        - name: work
+          mountPath: /work
+
+  entrypoint: e2e-tests
+  serviceAccountName: argo-workflow-sa # Service account name
+  volumeClaimTemplates: # Shared volume claim templates
+    - metadata:
+        name: work # Shared volume claim name
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce # Read-write access mode
+        resources:
+          requests:
+            storage: 30Gi # Storage size
+      status: {}
