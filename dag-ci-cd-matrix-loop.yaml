@@ -1,42 +1,15 @@
 metadata:
   name: dag-ci-cd-workflow
   namespace: argo
-  uid: 0103a56d-c546-475a-bf87-2abfd8b6452c
-  resourceVersion: "351421"
-  generation: 22
-  creationTimestamp: "2024-11-21T22:51:22Z"
-  labels:
-    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
-  managedFields:
-    - manager: argo
-      operation: Update
-      apiVersion: argoproj.io/v1alpha1
-      time: "2024-11-22T17:33:02Z"
-      fieldsType: FieldsV1
-      fieldsV1:
-        f:metadata:
-          f:labels:
-            .: {}
-            f:workflows.argoproj.io/creator: {}
-        f:spec: {}
 spec:
   templates:
     - name: e2e-tests
       inputs: {}
       outputs: {}
       metadata: {}
-      dag:
-        tasks:
-          - name: clone-repo
-            template: clone-repo
-            arguments:
-              parameters:
-                - name: repo
-                  value: "{{workflow.parameters.repo}}"
-                - name: branch
-                  value: "{{workflow.parameters.branch}}"
-          - name: setup-k3s
-            template: setup-k3s
+      steps:
+        - - name: e2e-tests-dag
+            template: e2e-tests-dag
             arguments:
               parameters:
                 - name: test
@@ -50,6 +23,144 @@ spec:
             dependencies:
               - clone-repo
             withParam: "{{workflow.parameters.test-matrix}}"
+
+    - name: e2e-tests-dag
+      inputs:
+        parameters:
+          - name: test
+          - name: install_k3s_version
+          - name: profile
+          - name: use-api
+      dag:
+        tasks:
+          - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: "{{workflow.parameters.repo}}"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+          - name: setup-k3s
+            template: ubuntu-container
+            arguments:
+              parameters:
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+                - name: install_k3s_version
+                  value: "{{inputs.parameters.install_k3s_version}}"
+                - name: profile
+                  value: "{{inputs.parameters.profile}}"
+                - name: use-api
+                  value: "{{inputs.parameters.use-api}}"
+                - name: commands
+                  value: >-
+                    echo "Installing dependencies..."
+
+                    apt-get update && apt-get install -y curl apt-transport-https
+                    ca-certificates gnupg lsb-release sudo golang make socat git
+
+                    echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+
+                    sudo apt-get install -y lsof
+
+                    make --version
+
+                    echo "Installing kubectl..."
+
+                    curl -LO "https://dl.k8s.io/release/$(curl -L -s
+                    https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+                    chmod +x kubectl
+
+                    mv kubectl /usr/local/bin/
+
+                    echo "Downloading and configuring Docker..."
+
+                    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+                    --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+                    echo "deb [arch=amd64
+                    signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+                    https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+                    | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+                    apt-get update && apt-get install -y docker-ce docker-ce-cli
+                    containerd.io
+
+                    echo "Waiting for Docker daemon to be ready..."
+
+                    until docker info; do sleep 3; done
+
+                    echo "Installing k3s..."
+
+                    if ! echo {{inputs.parameters.install_k3s_version}} | egrep
+                    '^v[0-9]+\.[0-9]+\.[0-9]+\+k3s1$'; then
+                      export INSTALL_K3S_VERSION=v1.31.0+k3s1
+                    else
+                      export INSTALL_K3S_VERSION={{inputs.parameters.install_k3s_version}}
+                    fi
+
+                    # Disable systemd-specific k3s installation
+
+                    export INSTALL_K3S_SYSTEMD_ENABLE=false
+
+                    export INSTALL_K3S_SKIP_START=true
+
+                    # Install k3s without systemd service
+
+                    curl -sfL https://get.k3s.io | sh -s - server
+
+                    # Manually start k3s in background
+
+                    k3s server > /var/log/k3s.log 2>&1 &
+
+                    timeout 300 bash -c '
+                      while ! kubectl cluster-info; do
+                        echo "Waiting for k3s cluster..."
+                        sleep 5
+                      done
+                    '
+
+                    kubectl cluster-info
+            dependencies:
+              - clone-repo
+          - name: download-load-images
+            template: ubuntu-container
+            arguments:
+              parameters:
+                - name: exec-path
+                  value: "{{workflow.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{workflow.parameters.cli-path}}"
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: tag
+                  value: "{{workflow.parameters.tag}}"
+                - name: commands
+                  value: >-
+                    echo "Pulling images from docker hub..."
+
+                    docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.tag}}
+
+                    docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.tag}}
+
+                    docker images
+
+                    echo "Loading images into k3s cluster..."
+
+                    docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.tag}} -o /tmp/argoexec.tar
+
+                    docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.tag}} -o /tmp/argocli.tar
+
+                    set -eux
+
+                    docker load < /tmp/argoexec.tar
+
+                    docker load < /tmp/argocli.tar
+            dependencies:
+              - setup-k3s
+
     - name: clone-repo
       inputs:
         parameters:
@@ -77,13 +188,19 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
-    - name: setup-k3s
+
+    - name: ubuntu-container
       inputs:
         parameters:
           - name: test
           - name: install_k3s_version
           - name: profile
           - name: use-api
+          - name: commands
+          - name: exec-path
+          - name: cli-path
+          - name: image
+          - name: tag
       outputs: {}
       metadata: {}
       container:
@@ -94,76 +211,7 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing dependencies..."
-
-            apt-get update && apt-get install -y curl apt-transport-https
-            ca-certificates gnupg lsb-release sudo golang make socat git
-
-            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
-
-            sudo apt-get install -y lsof
-
-            make --version
-
-            echo "Installing kubectl..."
-
-            curl -LO "https://dl.k8s.io/release/$(curl -L -s
-            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-            chmod +x kubectl
-
-            mv kubectl /usr/local/bin/
-
-            echo "Downloading and configuring Docker..."
-
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
-            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
-            echo "deb [arch=amd64
-            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
-            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-            | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-            apt-get update && apt-get install -y docker-ce docker-ce-cli
-            containerd.io
-
-            echo "Waiting for Docker daemon to be ready..."
-
-            until docker info; do sleep 3; done
-
-            if ! echo {{inputs.parameters.install_k3s_version}} | egrep
-            '^v[0-9]+\.[0-9]+\.[0-9]+\+k3s1$'; then
-              export INSTALL_K3S_VERSION=v1.31.0+k3s1
-            else
-              export INSTALL_K3S_VERSION={{inputs.parameters.install_k3s_version}}
-            fi
-
-            # Disable systemd-specific k3s installation
-
-            export INSTALL_K3S_SYSTEMD_ENABLE=false
-
-            export INSTALL_K3S_SKIP_START=true
-
-            # Install k3s without systemd service
-
-            curl -sfL https://get.k3s.io | sh -s - server
-
-            # Manually start k3s in background
-
-            k3s server > /var/log/k3s.log 2>&1 &
-
-            # Wait for k3s to be ready
-
-            timeout 300 bash -c '
-              while ! kubectl cluster-info; do
-                echo "Waiting for k3s cluster..."
-                sleep 5
-              done
-            '
-
-            # Confirm cluster is operational
-
-            kubectl cluster-info
+            {{inputs.parameters.commands}}
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375
@@ -190,6 +238,14 @@ spec:
         value: https://github.com/argoproj/argo-workflows.git
       - name: branch
         value: refs/heads/main
+      - name: exec-path
+        value: argoexec # Path for Argo Exec
+      - name: cli-path
+        value: argocli # Path for Argo CLI
+      - name: image
+        value: wesmsl/ # Docker hub username/ for images
+      - name: tag
+        value: v1 # Tag for the images
       - name: test-matrix
         value: |
           [
