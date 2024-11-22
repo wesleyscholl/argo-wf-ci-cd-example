@@ -2,8 +2,8 @@ metadata:
   name: dag-ci-cd-workflow
   namespace: argo
   uid: 0103a56d-c546-475a-bf87-2abfd8b6452c
-  resourceVersion: "346713"
-  generation: 14
+  resourceVersion: "351421"
+  generation: 22
   creationTimestamp: "2024-11-21T22:51:22Z"
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
@@ -11,7 +11,7 @@ metadata:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: "2024-11-22T16:47:57Z"
+      time: "2024-11-22T17:33:02Z"
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -94,17 +94,6 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing k3s version:
-            {{inputs.parameters.install_k3s_version}}" 
-
-            echo "Running test: {{inputs.parameters.test}}"
-
-            echo "Profile: {{inputs.parameters.profile}}"
-
-            echo "Use API: {{inputs.parameters.use-api}}"
-
-            DEBIAN_FRONTEND=noninteractive 
-
             echo "Installing dependencies..."
 
             apt-get update && apt-get install -y curl apt-transport-https
@@ -149,23 +138,32 @@ spec:
               export INSTALL_K3S_VERSION={{inputs.parameters.install_k3s_version}}
             fi
 
-            curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_ENABLE=true sh -
+            # Disable systemd-specific k3s installation
 
-            chmod 644 /etc/systemd/system/k3s.service
+            export INSTALL_K3S_SYSTEMD_ENABLE=false
 
-            until kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml cluster-info ;
-            do sleep 10s ; done
+            export INSTALL_K3S_SKIP_START=true
 
-            cp /etc/rancher/k3s/k3s.yaml /work/.kubeconfig
+            # Install k3s without systemd service
 
-            echo "- name: fake_token_user" >> /work/.kubeconfig
+            curl -sfL https://get.k3s.io | sh -s - server
 
-            echo "  user:" >> /work/.kubeconfig
+            # Manually start k3s in background
 
-            echo "    token: xxxxxx" >> /work/.kubeconfig
+            k3s server > /var/log/k3s.log 2>&1 &
 
-            until kubectl cluster-info ; do sleep 10s ; done
-        workingDir: /work/
+            # Wait for k3s to be ready
+
+            timeout 300 bash -c '
+              while ! kubectl cluster-info; do
+                echo "Waiting for k3s cluster..."
+                sleep 5
+              done
+            '
+
+            # Confirm cluster is operational
+
+            kubectl cluster-info
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375

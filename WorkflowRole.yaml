@@ -22,6 +22,35 @@ kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  namespace: kube-system
+  name: list-services-role
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: kube-system
+  name: list-services-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo
+roleRef:
+  kind: Role
+  name: list-services-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+---
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: pvc-status-role
   namespace: argo
 rules:
