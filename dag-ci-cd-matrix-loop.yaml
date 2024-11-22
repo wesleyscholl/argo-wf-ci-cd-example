@@ -1,6 +1,24 @@
 metadata:
   name: dag-ci-cd-workflow
   namespace: argo
+  uid: 0103a56d-c546-475a-bf87-2abfd8b6452c
+  resourceVersion: "357498"
+  generation: 23
+  creationTimestamp: "2024-11-21T22:51:22Z"
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-11-22T18:38:20Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
 spec:
   templates:
     - name: e2e-tests
@@ -20,10 +38,7 @@ spec:
                   value: "{{item.profile}}"
                 - name: use-api
                   value: "{{item.use-api}}"
-            dependencies:
-              - clone-repo
             withParam: "{{workflow.parameters.test-matrix}}"
-
     - name: e2e-tests-dag
       inputs:
         parameters:
@@ -31,6 +46,8 @@ spec:
           - name: install_k3s_version
           - name: profile
           - name: use-api
+      outputs: {}
+      metadata: {}
       dag:
         tasks:
           - name: clone-repo
@@ -57,8 +74,9 @@ spec:
                   value: >-
                     echo "Installing dependencies..."
 
-                    apt-get update && apt-get install -y curl apt-transport-https
-                    ca-certificates gnupg lsb-release sudo golang make socat git
+                    apt-get update && apt-get install -y curl
+                    apt-transport-https ca-certificates gnupg lsb-release sudo
+                    golang make socat git
 
                     echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
 
@@ -77,13 +95,15 @@ spec:
 
                     echo "Downloading and configuring Docker..."
 
-                    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
-                    --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+                    curl -fsSL https://download.docker.com/linux/ubuntu/gpg |
+                    gpg --dearmor -o
+                    /usr/share/keyrings/docker-archive-keyring.gpg
 
                     echo "deb [arch=amd64
                     signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
-                    https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-                    | tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    https://download.docker.com/linux/ubuntu $(lsb_release -cs)
+                    stable" | tee /etc/apt/sources.list.d/docker.list >
+                    /dev/null
 
                     apt-get update && apt-get install -y docker-ce docker-ce-cli
                     containerd.io
@@ -129,29 +149,35 @@ spec:
             template: ubuntu-container
             arguments:
               parameters:
-                - name: exec-path
-                  value: "{{workflow.parameters.exec-path}}"
-                - name: cli-path
-                  value: "{{workflow.parameters.cli-path}}"
-                - name: image
-                  value: "{{workflow.parameters.image}}"
-                - name: tag
-                  value: "{{workflow.parameters.tag}}"
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+                - name: install_k3s_version
+                  value: "{{inputs.parameters.install_k3s_version}}"
+                - name: profile
+                  value: "{{inputs.parameters.profile}}"
+                - name: use-api
+                  value: "{{inputs.parameters.use-api}}"
                 - name: commands
                   value: >-
                     echo "Pulling images from docker hub..."
 
-                    docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.tag}}
+                    docker pull
+                    {{workflow.parameters.image}}{{workflow.parameters.exec-path}}:{{workflow.parameters.tag}}
 
-                    docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.tag}}
+                    docker pull
+                    {{workflow.parameters.image}}{{workflow.parameters.cli-path}}:{{workflow.parameters.tag}}
 
                     docker images
 
                     echo "Loading images into k3s cluster..."
 
-                    docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.tag}} -o /tmp/argoexec.tar
+                    docker save
+                    {{workflow.parameters.image}}{{workflow.parameters.exec-path}}:{{workflow.parameters.tag}}
+                    -o /tmp/argoexec.tar
 
-                    docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.tag}} -o /tmp/argocli.tar
+                    docker save
+                    {{workflow.parameters.image}}{{workflow.parameters.cli-path}}:{{workflow.parameters.tag}}
+                    -o /tmp/argocli.tar
 
                     set -eux
 
@@ -160,7 +186,6 @@ spec:
                     docker load < /tmp/argocli.tar
             dependencies:
               - setup-k3s
-
     - name: clone-repo
       inputs:
         parameters:
@@ -188,7 +213,6 @@ spec:
         volumeMounts:
           - name: work
             mountPath: /work
-
     - name: ubuntu-container
       inputs:
         parameters:
@@ -197,10 +221,6 @@ spec:
           - name: profile
           - name: use-api
           - name: commands
-          - name: exec-path
-          - name: cli-path
-          - name: image
-          - name: tag
       outputs: {}
       metadata: {}
       container:
@@ -210,7 +230,7 @@ spec:
           - sh
           - "-c"
         args:
-          - >
+          - |
             {{inputs.parameters.commands}}
         env:
           - name: DOCKER_HOST
@@ -239,13 +259,13 @@ spec:
       - name: branch
         value: refs/heads/main
       - name: exec-path
-        value: argoexec # Path for Argo Exec
+        value: argoexec
       - name: cli-path
-        value: argocli # Path for Argo CLI
+        value: argocli
       - name: image
-        value: wesmsl/ # Docker hub username/ for images
+        value: wesmsl/
       - name: tag
-        value: v1 # Tag for the images
+        value: v1
       - name: test-matrix
         value: |
           [
