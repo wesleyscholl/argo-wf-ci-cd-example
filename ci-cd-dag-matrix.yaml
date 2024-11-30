@@ -1,0 +1,522 @@
+metadata:
+  name: dag-ci-cd-workflow
+  namespace: argo
+  uid: dfdfaa7a-22c5-4bde-ac16-16df89e9d96f
+  resourceVersion: "51616"
+  generation: 19
+  creationTimestamp: "2024-11-29T15:50:09Z"
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-11-30T02:52:25Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: e2e-tests
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: e2e-tests-dag
+            template: e2e-tests-dag
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: exec-path
+                  value: "{{workflow.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{workflow.parameters.cli-path}}"
+                - name: test
+                  value: "{{item.test}}"
+                - name: install_k3d_version
+                  value: "{{item.install_k3d_version}}"
+                - name: profile
+                  value: "{{item.profile}}"
+                - name: use-api
+                  value: "{{item.use-api}}"
+            withParam: "{{workflow.parameters.test-matrix}}"
+    - name: e2e-tests-dag
+      inputs:
+        parameters:
+          - name: image
+          - name: exec-path
+          - name: cli-path
+          - name: test
+          - name: install_k3d_version
+          - name: profile
+          - name: use-api
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: "{{workflow.parameters.repo}}"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+          - name: prepare-deploy-to-cluster-e2e-test
+            template: e2e-test
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{inputs.parameters.image}}"
+                - name: exec-path
+                  value: "{{inputs.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{inputs.parameters.cli-path}}"
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+                - name: install_k3d_version
+                  value: "{{inputs.parameters.install_k3d_version}}"
+                - name: profile
+                  value: "{{inputs.parameters.profile}}"
+                - name: use-api
+                  value: "{{inputs.parameters.use-api}}"
+            dependencies:
+              - clone-repo
+          - name: failed-e2e-test
+            template: exit-handler
+            dependencies:
+              - prepare-deploy-to-cluster-e2e-test
+            when: "{{tasks.prepare-deploy-to-cluster-e2e-test.outputs.result}} != 'Succeeded'"
+      synchronization:
+        mutex:
+          name: parallel
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+          - name: test
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - "--depth"
+          - "1"
+          - "--branch"
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - "--single-branch"
+          - "{{inputs.parameters.repo}}"
+          - .
+        workingDir: /work/{{inputs.parameters.test}}
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: e2e-test
+      inputs:
+        parameters:
+          - name: image
+          - name: exec-path
+          - name: cli-path
+          - name: test
+          - name: install_k3d_version
+          - name: profile
+          - name: use-api
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - bash
+          - "-c"
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            ulimit -n 1048576
+
+            apt-get update
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo golang make socat git
+
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+
+            go version
+
+            make --version
+
+            sudo apt-get install -y lsof
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Checking for SDK requirements: {{inputs.parameters.test}}"
+
+            if [ "{{inputs.parameters.test}}" = "test-java-sdk" ]; then
+              echo "Installing Java..."
+              apt-get update && apt-get install -y openjdk-8-jdk maven
+              java -version
+            elif [ "{{inputs.parameters.test}}" = "test-python-sdk" ]; then
+              echo "Installing Python..."
+              apt-get update && apt-get install -y python3 python3-pip
+              python3 --version
+            else
+              echo "No SDK installation required."
+            fi
+
+            echo "Creating k3d cluster..."
+
+            k3d cluster create argocluster --kubeconfig-switch-context --image
+            rancher/k3s:{{inputs.parameters.install_k3d_version}} &&
+
+            echo "Waiting for k3d cluster to be ready..."
+
+            until kubectl cluster-info; do sleep 3; done
+
+            echo "k3d is ready. Running commands..."
+
+            echo "Merging kubeconfig and switching context to k3d cluster..."
+
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context &&
+
+            kubectl version
+
+            echo "Pulling images from docker hub..."
+
+            docker pull
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+
+            docker pull
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+
+            docker images
+
+            echo "Loading images into k3s cluster..."
+
+            docker save
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            -o /tmp/argoexec.tar
+
+            docker save
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -o /tmp/argocli.tar
+
+            set -eux
+
+            docker load < /tmp/argoexec.tar
+
+            docker load < /tmp/argocli.tar
+
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            -c argocluster
+
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -c argocluster
+
+            echo "Setting up the hosts file..."
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            echo "Installing manifests..."
+
+            make install PROFILE={{inputs.parameters.profile}}
+            STATIC_FILES=false
+
+            kubectl get pods -n argo
+
+            echo "Building the controller..."
+
+            make controller kit STATIC_FILES=false
+
+            if {{inputs.parameters.use-api}}; then
+              echo "Building the CLI..."
+
+              make cli STATIC_FILES=false
+            fi
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client
+            STATIC_FILES=false LOG_LEVEL=info API={{inputs.parameters.use-api}}
+            UI=false POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+
+            make wait PROFILE={{inputs.parameters.profile}}
+            API={{inputs.parameters.use-api}}
+
+            echo "Wait for MinIO..."
+
+            until lsof -i :9000 > /dev/null ; do sleep 10s ; done
+
+            kubectl get pods -n argo
+
+            echo "Running E2E {{inputs.parameters.test}} tests..."
+
+            make {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m
+            STATIC_FILES=false
+        workingDir: /work/{{inputs.parameters.test}}/
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          limits:
+            cpu: "16"
+            memory: 16Gi
+          requests:
+            cpu: "15"
+            memory: 14Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - bash
+          - "-c"
+        args:
+          - >
+            apt-get update
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl sudo systemd
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            echo "Failure debug - k3s logs"
+
+            journalctl -u k3s
+
+            echo "Failure debug - describe MinIO/MySQL deployment"
+
+            set -eux
+
+            kubectl get deploy
+
+            kubectl describe deploy
+
+            echo "Failure debug - describe MinIO/MySQL pods"
+
+            kubectl get pods -l '!workflows.argoproj.io/workflow'
+
+            kubectl describe pods -l '!workflows.argoproj.io/workflow'
+
+            echo "Failure debug - MinIO/MySQL logs"
+
+            kubectl logs -l '!workflows.argoproj.io/workflow' --prefix
+
+            echo "Failure debug - Controller/API logs"
+
+            [ -e /tmp/argo.log ] && cat /tmp/argo.log
+
+            echo "Failure debug - describe Workflows"
+
+            kubectl get wf
+
+            kubectl describe wf
+
+            echo "Failure debug - describe Workflow pods"
+
+            kubectl get pods -l workflows.argoproj.io/workflow
+
+            kubectl describe pods -l workflows.argoproj.io/workflow
+
+            echo "Failure debug - Workflow Pod logs"
+
+            kubectl logs --all-containers -l workflows.argoproj.io/workflow
+            --prefix
+        resources:
+          requests:
+            cpu: "4"
+            memory: 4Gi
+  entrypoint: e2e-tests
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/argoproj/argo-workflows.git
+      - name: branch
+        value: refs/heads/main
+      - name: exec-path
+        value: argoexec
+      - name: cli-path
+        value: argocli
+      - name: image
+        value: quay.io/argoproj/
+      - name: tag
+        value: latest
+      - name: test-matrix
+        value: |
+          [
+            {
+              "test": "test-executor",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-api",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cli",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cron",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-examples",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-plugins",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "plugins",
+              "use-api": false
+            },
+            {
+              "test": "test-java-sdk",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-python-sdk",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-executor",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            }
+          ]
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+      status: {}
