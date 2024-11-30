@@ -1,0 +1,88 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: pvc-resource-deletion-example-
+  namespace: argo
+spec:
+  templates:
+    - name: pvc-lifecycle
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: create-pvc
+            template: create-pvc
+            arguments: {}
+          - name: delete-pvc
+            template: delete-pvc
+            arguments:
+              parameters:
+                - name: pvc-name
+                  value: pvc-test
+            dependencies:
+              - create-pvc
+          - name: validate-pvc-deletion
+            template: validate-pvc-deletion
+            arguments:
+              parameters:
+                - name: pvc-name
+                  value: pvc-test
+            dependencies:
+              - delete-pvc
+    - name: create-pvc
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      resource:
+        action: create
+        manifest: |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: pvc-test
+            namespace: argo
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+    - name: delete-pvc
+      inputs:
+        parameters:
+          - name: pvc-name
+      outputs: {}
+      metadata: {}
+      resource:
+        action: delete
+        manifest: |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{inputs.parameters.pvc-name}}"
+            namespace: "argo"
+    - name: validate-pvc-deletion
+      inputs:
+        parameters:
+          - name: pvc-name
+      outputs: {}
+      metadata: {}
+      script:
+        name: ""
+        image: alpine:latest
+        command:
+          - sh
+          - "-c"
+        resources: {}
+        source: >
+          if kubectl get pvc "{{inputs.parameters.pvc-name}}" -n argo >
+          /dev/null 2>&1; then
+            echo "PVC '{{inputs.parameters.pvc-name}}' still exists."
+            exit 1
+          else
+            echo "PVC '{{inputs.parameters.pvc-name}}' has been successfully deleted."
+            exit 0 
+          fi
+  entrypoint: pvc-lifecycle
+  arguments: {}
