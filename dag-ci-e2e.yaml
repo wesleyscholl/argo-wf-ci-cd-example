@@ -2,8 +2,8 @@ metadata:
   name: dag-ci-cd-workflow
   namespace: argo
   uid: 0103a56d-c546-475a-bf87-2abfd8b6452c
-  resourceVersion: "357498"
-  generation: 23
+  resourceVersion: "372057"
+  generation: 36
   creationTimestamp: "2024-11-21T22:51:22Z"
   labels:
     workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
@@ -11,7 +11,7 @@ metadata:
     - manager: argo
       operation: Update
       apiVersion: argoproj.io/v1alpha1
-      time: "2024-11-22T18:38:20Z"
+      time: "2024-11-22T21:07:15Z"
       fieldsType: FieldsV1
       fieldsV1:
         f:metadata:
@@ -72,7 +72,6 @@ spec:
                   value: "{{inputs.parameters.use-api}}"
             dependencies:
               - clone-repo
-
     - name: clone-repo
       inputs:
         parameters:
@@ -116,10 +115,11 @@ spec:
           - sh
           - "-c"
         args:
-          - |
+          - >
             echo "Installing dependencies..."
 
-            apt-get update && apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release sudo golang make socat git
+            apt-get update && apt-get install -y curl apt-transport-https
+            ca-certificates gnupg lsb-release sudo golang make socat git
 
             echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
 
@@ -138,15 +138,13 @@ spec:
 
             echo "Downloading and configuring Docker..."
 
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg |
-            gpg --dearmor -o
-            /usr/share/keyrings/docker-archive-keyring.gpg
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
             echo "deb [arch=amd64
             signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
-            https://download.docker.com/linux/ubuntu $(lsb_release -cs)
-            stable" | tee /etc/apt/sources.list.d/docker.list >
-            /dev/null
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
             apt-get update && apt-get install -y docker-ce docker-ce-cli
             containerd.io
@@ -164,41 +162,50 @@ spec:
               export INSTALL_K3S_VERSION={{inputs.parameters.install_k3s_version}}
             fi
 
-            # Disable systemd-specific k3s installation
+            # Define custom arguments for K3s installation
 
-            export INSTALL_K3S_SYSTEMD_ENABLE=false
+            export INSTALL_K3S_EXEC="--docker
+            --kubelet-arg=config=/work/test/e2e/manifests/kubelet-configuration.yaml"
 
-            export INSTALL_K3S_SKIP_START=true
-
-            # Install k3s without systemd service
+            # Install K3s
 
             curl -sfL https://get.k3s.io | sh -s - server
 
-            # Manually start k3s in background
+            echo "Starting K3s server in the background..."
 
-            k3s server > /var/log/k3s.log 2>&1 &
+            sudo k3s server > /var/log/k3s.log 2>&1 &
 
-            timeout 300 bash -c '
-              while ! kubectl cluster-info; do
-                echo "Waiting for k3s cluster..."
-                sleep 5
-              done
-            '
-            # Set up kubeconfig
+            # Wait for K3s to start and generate kubeconfig
 
-            until kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml cluster-info ; do sleep 10s ; done
+            echo "Waiting for K3s cluster to be ready..."
 
-            cp /etc/rancher/k3s/k3s.yaml /work/.kubeconfig
+            timeout 300 bash -c 'until [ -f /etc/rancher/k3s/k3s.yaml ]; do echo
+            "Waiting..."; sleep 5; done'
 
-            echo "- name: fake_token_user" >> $KUBECONFIG
+            # Verify the kubeconfig file exists
 
-            echo "  user:" >> $KUBECONFIG
+            if [ ! -f /etc/rancher/k3s/k3s.yaml ]; then
+              echo "Error: K3s kubeconfig file not found at /etc/rancher/k3s/k3s.yaml"
+              exit 1
+            fi
 
-            echo "    token: xxxxxx" >> $KUBECONFIG
+            # Set up kubeconfig for kubectl
 
-            until kubectl cluster-info ; do sleep 10s ; done
+            echo "Setting up kubeconfig..."
 
-            kubectl cluster-info
+            mkdir -p ~/.kube
+
+            cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+
+            chmod 600 ~/.kube/config
+
+            # Confirm K3s cluster is operational
+
+            k3s kubectl cluster-info
+
+
+
+
 
             echo "Pulling images from docker hub..."
 
@@ -240,31 +247,35 @@ spec:
 
             echo "Installing manifests..."
 
-            make install PROFILE={{inputs.parameters.profile}} STATIC_FILES=false
+            make -C /work install PROFILE={{inputs.parameters.profile}}
+            STATIC_FILES=false
 
             kubectl get pods -n argo
 
             echo "Building the controller..."
 
-            make controller kit STATIC_FILES=false
+            make -C /work controller kit STATIC_FILES=false
 
             if {{inputs.parameters.use-api}}; then
               echo "Building the CLI..."
 
-              make cli STATIC_FILES=false
+              make -C /work cli STATIC_FILES=false
             fi
 
             echo "Starting argo workflow controller & API..."
 
-            make start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client STATIC_FILES=false LOG_LEVEL=info API={{inputs.parameters.use-api}} UI=false POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+            make -C /work start PROFILE={{inputs.parameters.profile}}
+            AUTH_MODE=client STATIC_FILES=false LOG_LEVEL=info
+            API={{inputs.parameters.use-api}} UI=false
+            POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
 
-            kubectl get pods -n argo &
-
-            make wait PROFILE={{inputs.parameters.profile}} API={{inputs.parameters.use-api}}
+            make -C /work wait PROFILE={{inputs.parameters.profile}}
+            API={{inputs.parameters.use-api}}
 
             echo "Running E2E {{inputs.parameters.test}} tests..."
 
-            make {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+            make -C /work {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m
+            STATIC_FILES=false
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375
