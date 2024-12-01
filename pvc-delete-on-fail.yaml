@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: pvc-delete-on-fail
+  namespace: argo
+spec:
+  templates:
+    - name: main-task
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine
+        command:
+          - sh
+          - "-c"
+        args:
+          - |
+            exit 1 # Simulate workflow failure
+        resources: {}
+        volumeMounts:
+          - name: workdir
+            mountPath: /mnt/vol
+    - name: cleanup-hook
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      resource:
+        action: delete
+        manifest: |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{workflow.name}}-workdir"
+  entrypoint: main-task
+  arguments: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+      status: {}
+  hooks:
+    - name: cleanup
+      template: cleanup-hook
+      expression: "{{workflow.status}} == 'Failed'"
