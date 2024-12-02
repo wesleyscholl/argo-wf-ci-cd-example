@@ -1,0 +1,85 @@
+metadata:
+  name: argo-workflow
+  namespace: argo
+  uid: df11b732-2b24-4b67-af0e-1d95ac608fac
+  resourceVersion: "14383"
+  generation: 9
+  creationTimestamp: "2024-12-02T15:27:19Z"
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-12-02T16:00:41Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: Argo-Config-Checkout
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: check-env
+            template: check-env
+            arguments:
+              parameters:
+                - name: branch
+                  value: argo
+    - name: check-env
+      inputs:
+        parameters:
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu
+        command:
+          - sh
+          - "-c"
+        args:
+          - echo {{inputs.parameters.branch}} | tr /- _; exit 1
+        resources: {}
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: celebrate
+            template: celebrate
+            arguments: {}
+    - name: celebrate
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: stedolan/jq
+        command:
+          - sh
+          - "-c"
+        args:
+          - echo '{{=toJson(workflow.failures)}}'
+        resources: {}
+  entrypoint: Argo-Config-Checkout
+  arguments: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+      status: {}
+  onExit: exit-handler
