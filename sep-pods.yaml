@@ -1,0 +1,42 @@
+Argo Workflows Multi-Pod Resource Example
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: multi-resource-workflow-
+spec:
+  entrypoint: main
+  templates:
+    # CPU-Intensive Template
+    - name: cpu-intensive-template
+      # Specifies resource requirements for CPU-heavy workload
+      container:
+        image: python:3.9
+        command: [python, -c]
+        args: ["import multiprocessing; print(f'CPU Cores: {multiprocessing.cpu_count()}'); import time; time.sleep(60)"]
+        resources:
+          requests:
+            cpu: "2"  # Request 2 full CPU cores
+            memory: 4Gi
+          limits:
+            cpu: "4"  # Limit to 4 CPU cores
+            memory: 8Gi
+      # Node selector to target CPU-optimized nodes
+      nodeSelector:
+        nodeType: cpu-optimized
+
+    # GPU-Intensive Template
+    - name: gpu-intensive-template
+      # Specifies resource requirements for GPU workload
+      container:
+        image: nvidia/cuda:11.0-base
+        command: ["/bin/bash", "-c"]
+        args: ["nvidia-smi; sleep 60"]  # Display GPU information
+        resources:
+          requests:
+            nvidia.com/gpu: 1  # Request 1 GPU
+          limits:
+            nvidia.com/gpu: 1  # Limit to 1 GPU
+      # Node selector to target GPU-enabled nodes
+      nodeSelector:
+        accelerator: nvidia-gpu
