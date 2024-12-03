@@ -46,7 +46,7 @@ Artifacts provide a more flexible mechanism for data transfer, supporting persis
 | Sharing configuration files in a single container group                     | Implementing complex CI/CD pipelines                                                        |
 |                                                                             | Data persistence across workflow executions                                                 |
 
-#### Workflow Examples
+### Workflow Examples
 
 - **Artifact Passing**
 
