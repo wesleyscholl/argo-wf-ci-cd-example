@@ -40,3 +40,48 @@ spec:
       # Node selector to target GPU-enabled nodes
       nodeSelector:
         accelerator: nvidia-gpu
+
+
+# Volumes act as shared storage mechanisms within the same pod or workflow, enabling immediate data exchange between containers. They are primarily suited for short-lived data sharing within a single workflow execution, also known as ephemeral storage. For a long-term data storage volume, configure a Persistent Volume Claim (PVC) instead.
+
+
+# Artifacts provide a more flexible mechanism for data transfer, supporting persistent storage and versioning. They can be used across workflow steps, even across pods or clusters, and are particularly useful for caching and transferring data. Artifacts are stored in a central repository, such as S3, Minio or Google Cloud Storage (GCS), and can be shared across steps, tasks, pods, containers, workflows, namespaces or clusters.
+
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: artifact-passing-
+spec:
+  entrypoint: artifact-example
+  templates:
+    - name: artifact-example
+      steps:
+        - - name: generate-artifact
+            template: hello-world-to-file
+        - - name: consume-artifact
+            template: print-message-from-file
+            arguments:
+              artifacts: # Specifies the artifact argument
+                - name: message # Artifact name
+                  from: "{{steps.generate-artifact.outputs.artifacts.hello-art}}" # Path to the artifact, using the output artifact name from the previous step
+
+    - name: hello-world-to-file
+      container:
+        image: busybox
+        command: [sh, -c]
+        args: ["sleep 1; echo hello world | tee /tmp/hello_world.txt"] # Writes hello world to /tmp/hello_world.txt
+      outputs:
+        artifacts: # Specifies the output artifact
+          - name: hello-art # Artifact name
+            path: /tmp/hello_world.txt # Path to the artifact
+
+    - name: print-message-from-file
+      inputs:
+        artifacts: # Specifies the artifact input
+          - name: message # Artifact name
+            path: /tmp/message # Path to the artifact
+      container:
+        image: alpine:latest
+        command: [sh, -c]
+        args: ["cat /tmp/message"] # Reads and prints the message from the artifact
