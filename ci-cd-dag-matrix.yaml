@@ -145,10 +145,6 @@ spec:
           - "-c"
         args:
           - >
-            DEBIAN_FRONTEND=noninteractive 
-
-            ulimit -n 1048576
-
             apt-get update
 
             echo "Installing dependencies..."

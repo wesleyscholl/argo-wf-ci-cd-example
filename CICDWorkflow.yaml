@@ -652,22 +652,17 @@ spec:
             cat kustomization.yaml
 
             if [ $? -eq 0 ]; then
-
               echo "Successfully updated the kustomization.yaml."
-
             else
-
               echo "Failed to update the kustomization.yaml."
-
               exit 1
-
             fi
         workingDir: /work
         resources: # Adjust resources as needed
           requests:
             cpu: "2"
             memory: 4Gi
-        volumeMounts:
+        volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
     - name: commit-manifests
@@ -707,15 +702,10 @@ spec:
             HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
 
             if [ $? -eq 0 ]; then
-
               echo "Successfully committed and pushed the changes to the repository."
-
             else
-
               echo "Failed to commit and push the changes to the repository."
-
               exit 1
-
             fi
         workingDir: /work # Working directory
         env:
@@ -766,15 +756,10 @@ spec:
             argocd app sync {{inputs.parameters.app-name}}
 
             if [ $? -eq 0 ]; then
-
               echo "Successfully synced the Argo CD application."
-
             else
-
               echo "Failed to sync the Argo CD application."
-
               exit 1
-
             fi
         env:
           - name: ARGOCD_SERVER # Argo CD server URL
@@ -801,7 +786,7 @@ spec:
   arguments:
     parameters:
       - name: repo
-        value: https://github.com/konjo-open-src/argo-workflows # Repository URL
+        value: https://github.com/argoproj/argo-workflows.git # Repository URL
       - name: branch
         value: refs/heads/main # Branch name from the webhook payload (e.g., refs/heads/main, refs/heads/feature-branch)
       - name: name
@@ -815,9 +800,91 @@ spec:
       - name: cli-path
         value: argocli # Path for Argo CLI
       - name: image
-        value: wesmsl/ # Docker hub username/ for images
+        value: quay.io/argoproj/ # Docker hub/Quay prefix/ or username/ for images
       - name: tag
-        value: v1 # Tag for the images
+        value: latest # Tag for the images
+      - name: test-matrix # Test matrix for the E2E tests
+        value: |
+          [
+            {
+              "test": "test-executor", # Test name
+              "install_k3d_version": "v1.31.0-k3s1", # K3d version
+              "profile": "minimal", # E2E test profile
+              "use-api": false # Is the API required
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-api",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cli",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "mysql",
+              "use-api": true
+            },
+            {
+              "test": "test-cron",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-examples",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-plugins",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "plugins",
+              "use-api": false
+            },
+            {
+              "test": "test-java-sdk",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-python-sdk",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": true
+            },
+            {
+              "test": "test-executor",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-corefunctional",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            },
+            {
+              "test": "test-functional",
+              "install_k3d_version": "v1.28.13-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            }
+          ]
   serviceAccountName: argo-workflow-sa # Service account name
   volumeClaimTemplates: # Shared volume claim templates
     - metadata:
