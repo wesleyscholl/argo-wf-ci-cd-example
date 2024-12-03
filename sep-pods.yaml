@@ -85,3 +85,79 @@ spec:
         image: alpine:latest
         command: [sh, -c]
         args: ["cat /tmp/message"] # Reads and prints the message from the artifact
+
+
+---
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: volumes-emptydir-
+spec:
+  entrypoint: volumes-emptydir-example
+  volumes: # Defines the volume - Only available within the same workflow execution (ephemeral storage)
+    - name: workdir # Volume name
+      emptyDir: {} # Empty directory volume
+
+  templates:
+    - name: volumes-emptydir-example
+      container:
+        image: debian:latest
+        command: ["/bin/bash", "-c"]
+        args: ["
+          vol_found=`mount | grep /mnt/vol` && \ # Checks if the volume is mounted
+          if [[ -n $vol_found ]]; then echo \"Volume mounted and found\"; else echo \"Not found\"; fi
+        "]
+        volumeMounts: # Mounts the volume to the container
+          - name: workdir # Volume name
+            mountPath: /mnt/vol # Mount path within the container
+
+
+---
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: volumes-pvc-
+spec:
+  entrypoint: volumes-pvc-example
+  volumeClaimTemplates: # Defines the Persistent Volume Claim (PVC)
+    - metadata:
+        name: workdir # PVC name
+      spec:
+        accessModes: ["ReadWriteOnce"] # PVC access mode, allowing read and write operations
+        resources:
+          requests:
+            storage: 1Gi # Requested storage size - 1 Gigabyte
+
+  templates:
+    - name: volumes-pvc-example
+      steps:
+        - - name: generate
+            template: hello-world-to-file
+        - - name: print 
+            template: print-message-from-file # Passing the PVC not required in steps
+
+    - name: hello-world-to-file
+      container:
+        image: busybox
+        command: [sh, -c]
+        args:
+          [
+            "echo generating message in volume; echo hello world | tee /mnt/vol/hello_world.txt", # Writes hello world to the PVC volume
+          ]
+        volumeMounts: # Mounts the PVC volume to the container
+          - name: workdir # PVC name
+            mountPath: /mnt/vol # Mount path within the container
+
+    - name: print-message-from-file
+      container:
+        image: alpine:latest
+        command: [sh, -c]
+        args:
+          [
+            "echo getting message from volume; find /mnt/vol; cat /mnt/vol/hello_world.txt", # Reads and prints the message from the PVC volume
+          ]
+        volumeMounts: # Mounts the PVC volume to the container
+          - name: workdir # PVC name
+            mountPath: /mnt/vol # Mount path within the container
