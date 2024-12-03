@@ -1,9 +1,13 @@
 ### Artifacts and Volumes: Core Differences
 
 Volumes and artifacts serve different purposes within workflows:
+
 **Volumes:**
+
 Volumes act as shared storage mechanisms within the same pod, enabling immediate data exchange between containers. They are primarily suited for short-lived, immediate data sharing within a single workflow execution.
+
 **Artifacts:**
+
 Artifacts provide a more flexible mechanism for data transfer, supporting persistent storage and versioning. They can be used across workflow steps, even across pods or clusters, and are particularly useful for caching and transferring data.
 
 ### Detailed Comparison
