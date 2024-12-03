@@ -113,9 +113,6 @@ spec:
                     echo 'Building Argo CLI...'
 
                     make cli STATIC_FILES=false
-
-                    [ -f /work/dist/argo ] && echo 'Argo CLI build successful.'
-                    || (echo 'Argo CLI build failed.' && exit 1)
         - - name: create-exec-image
             template: create-image
             arguments:
@@ -126,7 +123,7 @@ spec:
                   value: "{{workflow.parameters.image}}"
                 - name: tag
                   value: "{{workflow.parameters.tag}}"
-        - - name: create-cli-image
+          - name: create-cli-image
             template: create-image
             arguments:
               parameters:
@@ -145,10 +142,7 @@ spec:
                     echo 'Running unit tests...'
 
                     make test STATIC_FILES=false GOTEST='go test -p 20
-                    -covermode=atomic -coverprofile=coverage.out' 
-
-                    [ -f /work/coverage.out ] && echo 'Unit tests passed.' ||
-                    (echo 'Unit tests failed.' && exit 1)
+                    -covermode=atomic -coverprofile=coverage.out'
         - - name: run-coverage
             template: golang-step
             arguments:
@@ -161,12 +155,9 @@ spec:
 
                     echo 'Code coverage report:'
 
-                    go tool cover -func=coverage.out 
-
-                    [ -f /work/coverage.out ] && echo 'Coverage report
-                    collected.' || (echo 'Coverage report failed.' && exit 1)
-        - - name: prepare-deploy-to-cluster-e2e-test
-            template: prepare-deploy-to-cluster-e2e-test
+                    go tool cover -func=coverage.out
+        - - name: e2e-tests-dag
+            template: e2e-tests-dag
             arguments:
               parameters:
                 - name: image
@@ -175,6 +166,15 @@ spec:
                   value: "{{workflow.parameters.exec-path}}"
                 - name: cli-path
                   value: "{{workflow.parameters.cli-path}}"
+                - name: test
+                  value: "{{item.test}}"
+                - name: install_k3d_version
+                  value: "{{item.install_k3d_version}}"
+                - name: profile
+                  value: "{{item.profile}}"
+                - name: use-api
+                  value: "{{item.use-api}}"
+            withParam: "{{workflow.parameters.test-matrix}}"
         - - name: approval
             template: approval
             arguments: {}
@@ -216,7 +216,8 @@ spec:
               parameters:
                 - name: app-name
                   value: "{{workflow.parameters.path}}"
-    - name: clone-repo
+
+    - name: clone-repo # Clones the input repository into the shared volume
       inputs:
         parameters:
           - name: repo
@@ -229,7 +230,7 @@ spec:
         args:
           - clone
           - "--depth"
-          - "1" # Shallow clone
+          - "1" # Shallow clone for faster cloning
           - "--branch"
           - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch
           - "--single-branch"
@@ -243,10 +244,11 @@ spec:
         volumeMounts: # Shared volume mounts between tasks
           - name: work
             mountPath: /work
-    - name: golang-step
+
+    - name: golang-step # Reusable Go step for building, testing, and running Go commands
       inputs:
         parameters:
-          - name: commands
+          - name: commands # Go container commands
       outputs: {}
       metadata: {}
       container:
@@ -263,12 +265,13 @@ spec:
             value: "on" # Enable Go modules
         resources: # Adjust resources as needed
           requests:
-            cpu: "10"
-            memory: 10Gi
+            cpu: "16"
+            memory: 16Gi
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
-    - name: create-image
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
+
+    - name: create-image # Builds, tags, and pushes the Docker image to the registry
       inputs:
         parameters:
           - name: path
@@ -290,7 +293,7 @@ spec:
           - "--local"
           - dockerfile=. # Dockerfile path
           - "--output" # Creates image with tag and pushes to registry
-          - >-
+          - >- # Image prefix, name and tag - e.g., quay.io/argoproj/argoexec:latest
             type=image,name={{inputs.parameters.image}}{{inputs.parameters.path}}:{{inputs.parameters.tag}},push=true
           - "--opt"
           - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
@@ -302,14 +305,14 @@ spec:
             value: /.docker
         resources: # Adjust as needed
           requests:
-            cpu: "10"
-            memory: 10Gi
+            cpu: "16"
+            memory: 16Gi
         volumeMounts: # Shared volume mounts between tasks
           - name: work # Shared working volume
-            mountPath: /work
+            mountPath: /work # Mount path
           - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
             mountPath: /.docker # Using this mount path
-        readinessProbe:
+        readinessProbe: # Readiness probe for the buildkit container
           exec:
             command:
               - sh
@@ -317,14 +320,57 @@ spec:
               - buildctl debug workers # Check if the buildkit workers are running
       volumes:
         - name: docker-config # Ensure this volume is configured
-          secret:
+          secret: # Docker registry API key secret
             secretName: docker-config # This secret holds the API key to your Docker registry
-    - name: prepare-deploy-to-cluster-e2e-test
+
+    - name: e2e-tests-dag # DAG for running E2E tests in parallel
       inputs:
         parameters:
           - name: image
           - name: exec-path
           - name: cli-path
+          - name: test
+          - name: install_k3d_version
+          - name: profile
+          - name: use-api
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: prepare-deploy-to-cluster-run-e2e-tests
+            template: e2e-test
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{inputs.parameters.image}}"
+                - name: exec-path
+                  value: "{{inputs.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{inputs.parameters.cli-path}}"
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+                - name: install_k3d_version
+                  value: "{{inputs.parameters.install_k3d_version}}"
+                - name: profile
+                  value: "{{inputs.parameters.profile}}"
+                - name: use-api
+                  value: "{{inputs.parameters.use-api}}"
+          - name: failed-e2e-test # Exit handler for failed E2E tests
+            template: exit-handler # Exit handler template
+            dependencies:
+              - prepare-deploy-to-cluster-run-e2e-tests # Exit handler dependency
+            when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Exit handler condition - only runs when the E2E tests fail
+
+    - name: prepare-deploy-to-cluster-run-e2e-tests
+      inputs:
+        parameters:
+          - name: image
+          - name: exec-path
+          - name: cli-path
+          - name: test
+          - name: install_k3d_version
+          - name: profile
+          - name: use-api
       outputs: {}
       metadata: {}
       container:
@@ -335,34 +381,22 @@ spec:
           - "-c"
         args:
           - >
-            DEBIAN_FRONTEND=noninteractive 
-
-            apt-get update
-
-            echo "Installing dependencies..."
+            echo "Installing dependencies..." && apt-get update
 
             apt-get install -y curl apt-transport-https ca-certificates gnupg
             lsb-release sudo golang make socat git
 
-            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a
+            echo "export PATH=$PATH:/usr/local/go/bin" | tee -a # Add Go to the PATH
 
-            sudo apt-get install -y lsof
+            go version && make --version # Check Go and Make versions
 
-            make --version
+            sudo apt-get install -y lsof # Install lsof for checking controller/API status
 
-            echo "Installing k3d..."
+            echo "Installing k3d..." && curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
 
-            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
-            | bash
+            echo "Installing kubectl..." && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 
-            echo "Installing kubectl..."
-
-            curl -LO "https://dl.k8s.io/release/$(curl -L -s
-            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-            chmod +x kubectl
-
-            mv kubectl /usr/local/bin/
+            chmod +x kubectl && mv kubectl /usr/local/bin/ # Make kubectl executable, move kubectl to the bin directory
 
             echo "Downloading and configuring Docker..."
 
@@ -377,49 +411,52 @@ spec:
             apt-get update && apt-get install -y docker-ce docker-ce-cli
             containerd.io
 
-            echo "Waiting for Docker daemon to be ready..."
+            echo "Waiting for Docker daemon to be ready..." && until docker info; do sleep 3; done
 
-            until docker info; do sleep 3; done
+            echo "Checking for SDK requirements: {{inputs.parameters.test}}"
 
-            echo "Docker daemon is ready. Running commands..."
+            if [ "{{inputs.parameters.test}}" = "test-java-sdk" ]; then # Check for Java SDK
+              echo "Installing Java..."
+              apt-get update && apt-get install -y openjdk-8-jdk maven
+              java -version # Check Java version
+            elif [ "{{inputs.parameters.test}}" = "test-python-sdk" ]; then # Check for Python SDK
+              echo "Installing Python..."
+              apt-get update && apt-get install -y python3 python3-pip
+              python3 --version # Check Python version
+            else
+              echo "No SDK installation required."
+            fi
 
-            echo "Pulling images from docker hub..."
+            echo "Creating k3d cluster..." && k3d cluster create argocluster --kubeconfig-switch-context --image rancher/k3s:{{inputs.parameters.install_k3d_version}} &&
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            echo "Waiting for k3d cluster to be ready..." && until kubectl cluster-info; do sleep 3; done
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            echo "k3d is ready, Merging kubeconfig and switching context to k3d cluster..."
 
-            docker images
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context && kubectl version # Check kubectl version
 
-            echo "Creating k3d cluster..."
+            echo "Pulling images from docker hub..." && docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Pull the exec image
 
-            k3d cluster create argocluster --kubeconfig-switch-context
+            docker pull
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Pull the CLI image
 
-            echo "Waiting for k3d cluster to be ready..."
+            docker images && echo "Loading images into k3s cluster..." && docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar # Save the exec image
 
-            until kubectl cluster-info; do sleep 3; done
+            docker save
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -o /tmp/argocli.tar # Save the CLI image
 
-            echo "k3d is ready. Running commands..."
+            set -eux # Exit on error, verbose output mode
 
-            echo "Merging kubeconfig and switching context to k3d cluster..."
+            docker load < /tmp/argoexec.tar && docker load < /tmp/argocli.tar # Load the exec and CLI images
 
-            k3d kubeconfig merge argocluster --kubeconfig-switch-context
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            -c argocluster # Import the exec image into k3d
 
-            kubectl cluster-info
-
-            kubectl version
-
-            echo "Loading images into k3d cluster..."
-
-            docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar
-
-            docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} -o /tmp/argocli.tar
-
-            set -eux
-
-            docker load < /tmp/argoexec.tar
-
-            docker load < /tmp/argocli.tar
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -c argocluster # Import the CLI image into k3d
 
             echo "Setting up the hosts file..."
 
@@ -433,36 +470,43 @@ spec:
 
             echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
 
-            echo "Installing manifests..."
+            echo "Installing manifests..." && make install PROFILE={{inputs.parameters.profile}} STATIC_FILES=false
 
-            make install PROFILE=minimal STATIC_FILES=false
+            kubectl get pods -n argo # Check the pods in the argo namespace
 
-            kubectl get pods -n argo
+            echo "Building the controller..." && make controller kit STATIC_FILES=false
+
+            if {{inputs.parameters.use-api}}; then
+              echo "Building the CLI..." && make cli STATIC_FILES=false
+            fi
 
             echo "Starting argo workflow controller & API..."
 
-            make start PROFILE=mysql AUTH_MODE=client STATIC_FILES=false
-            LOG_LEVEL=info API=true UI=false POD_STATUS_CAPTURE_FINALIZER=true >
-            /tmp/argo.log 2>&1 &
+            make start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client
+            STATIC_FILES=false LOG_LEVEL=info API={{inputs.parameters.use-api}}
+            UI=false POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
 
-            make wait PROFILE=mysql API=true  
+            make wait PROFILE={{inputs.parameters.profile}}
+            API={{inputs.parameters.use-api}} # Wait for the controller to start
 
-            echo "Running E2E tests..."
+            echo "Wait for MinIO..." && until lsof -i :9000 > /dev/null ; do sleep 10s ; done
 
-            make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
-        workingDir: /work/ # Working directory
+            kubectl get pods -n argo # Check the pods in the argo namespace
+
+            echo "Running E2E {{inputs.parameters.test}} tests..." && make {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+        workingDir: /work/{{inputs.parameters.test}}/ # Working directory - separate for each test
         env:
-          - name: DOCKER_HOST
+          - name: DOCKER_HOST # Docker host URL
             value: tcp://localhost:2375 # Docker host URL
-          - name: DOCKER_CONFIG
+          - name: DOCKER_CONFIG # Docker config path
             value: /.docker # Docker config path
         resources: # Adjust resources as needed
           requests:
-            cpu: "10" # E2E tests will fail if the resources are not sufficient
-            memory: 10Gi # Ensure to allocate 8+ cpu and 8+ Gi memory
+            cpu: "16" # E2E tests will fail if the resources are not sufficient
+            memory: 16Gi # Ensure to allocate 8+ cpu and 8+ Gi memory
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
           - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
             mountPath: /.docker # Using this mount path
       volumes:
@@ -477,12 +521,13 @@ spec:
           resources: {}
           securityContext: # Security context
             privileged: true # Privileged mode
-          mirrorVolumeMounts: true
-    - name: approval
+          mirrorVolumeMounts: true # Mirror volume mounts between sidecars and containers
+
+    - name: approval # Approval task for manual approval
       inputs:
         parameters:
           - name: approve
-            default: "NO"
+            default: "NO" # Default value for approval
             enum:
               - "YES" # Approval options
               - "NO"
@@ -491,10 +536,11 @@ spec:
         parameters:
           - name: approve # Approval parameter
             valueFrom:
-              supplied: {}
+              supplied: {} # Gets the approval value from the user
       metadata: {}
-      suspend: {}
-    - name: docker-tag-push
+      suspend: {} # Suspend the workflow until approval is received
+
+    - name: docker-tag-push # Tags and pushes the tested images to Docker Hub
       inputs:
         parameters:
           - name: image
@@ -510,11 +556,7 @@ spec:
           - "-c"
         args:
           - >
-            DEBIAN_FRONTEND=noninteractive 
-
-            apt-get update
-
-            echo "Installing dependencies..."
+            echo "Installing dependencies..." && apt-get update
 
             apt-get install -y curl apt-transport-https ca-certificates gnupg
             lsb-release sudo
@@ -532,45 +574,25 @@ spec:
             apt-get update && apt-get install -y docker-ce docker-ce-cli
             containerd.io
 
-            echo "Waiting for Docker daemon to be ready..."
-
-            until docker info; do sleep 3; done
-
-            echo "Docker daemon is ready. Running commands..."
+            echo "Waiting for Docker daemon to be ready..." && until docker info; do sleep 3; done
 
             echo "Pulling the CLI and exec images..."
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Pull the CLI image
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Pull the exec image
 
-            echo "Tagging and pushing the images to Docker Hub..."
-
-            docker images
+            echo "Tagging and pushing the images to Docker Hub..." && docker images # Check the pulled images
 
             docker tag {{inputs.parameters.image}}{{inputs.parameters.cli-path}} 
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Tag the CLI image
 
             docker tag {{inputs.parameters.image}}{{inputs.parameters.exec-path}} 
-            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Tag the exec image
 
-            echo "Pushing the images to Docker Hub..."
+            docker push {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Push the CLI image
 
-            docker push {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
-
-            docker push {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
-
-            if [ $? -eq 0 ]; then
-
-              echo "Successfully tagged and pushed the images to Docker Hub."
-
-            else
-
-              echo "Failed to tag and push the images to Docker Hub."
-
-              exit 1
-
-            fi
+            docker push {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Push the exec image
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375 # Docker host URL
@@ -581,13 +603,13 @@ spec:
             cpu: "10"
             memory: 10Gi
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
           - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
             mountPath: /.docker # Using this mount path
       volumes:
         - name: docker-config # Ensure this volume is configured
-          secret:
+          secret: # Docker registry API key secret
             secretName: docker-config # This secret holds the API key to your Docker registry
       sidecars: # Docker dind sidecar
         - name: dind
@@ -597,8 +619,9 @@ spec:
           resources: {}
           securityContext: # Security context
             privileged: true # Privileged mode
-          mirrorVolumeMounts: true
-    - name: update-manifests
+          mirrorVolumeMounts: true # Mirror volume mounts between sidecars and containers
+
+    - name: update-manifests # Updates the kustomization.yaml with the new image tags
       inputs:
         parameters:
           - name: image
@@ -615,57 +638,37 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing dependencies..."
-
-            apt-get update && apt-get install -y curl
+            echo "Installing dependencies..." && apt-get update && apt-get install -y curl
 
             curl -s
             "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
-            | bash
+            | bash # Install kustomize
 
-            mv kustomize /usr/local/bin/
+            mv kustomize /usr/local/bin/ # Move kustomize to the bin directory
 
-            kustomize version
-
-            cd manifests/base
+            kustomize version && cd manifests/base # Check kustomize version and move to the base directory
 
             echo "Updating kustomization.yaml with the new image tags..."
 
             kustomize edit set image
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}}
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}} # Update the CLI image
 
             kustomize edit set image
-            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}}
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}} # Update the exec image
 
-            echo "Verifying the updated kustomization.yaml..."
+            echo "Verifying the updated kustomization.yaml..." && kustomize build . # Verify the updated kustomization.yaml
 
-            kustomize build .
-
-            echo "Searching for the updated image tags..."
-
-            grep {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}} kustomization.yaml
-
-            grep {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}} kustomization.yaml
-
-            echo "Updated kustomization.yaml:"
-
-            cat kustomization.yaml
-
-            if [ $? -eq 0 ]; then
-              echo "Successfully updated the kustomization.yaml."
-            else
-              echo "Failed to update the kustomization.yaml."
-              exit 1
-            fi
-        workingDir: /work
+            echo "Updated kustomization.yaml:" && cat kustomization.yaml # Display the updated kustomization.yaml
+        workingDir: /work # Working directory
         resources: # Adjust resources as needed
           requests:
             cpu: "2"
             memory: 4Gi
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
-    - name: commit-manifests
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
+
+    - name: commit-manifests # Commits and pushes the updated kustomization.yaml to the git repository
       inputs:
         parameters:
           - name: commit-message
@@ -683,30 +686,13 @@ spec:
           - >
             echo "Configuring git user email and name..."
 
-            git config --global user.email "{{inputs.parameters.email}}"
+            git config --global user.email "{{inputs.parameters.email}}" && git config --global user.name "{{inputs.parameters.name}}"
 
-            git config --global user.name "{{inputs.parameters.name}}"
+            echo "Staging all changes..." && git add -A 
 
-            echo "Staging all changes..."
+            echo "Committing changes..." && git commit -m "{{inputs.parameters.commit-message}}" 
 
-            git add -A 
-
-            echo "Committing changes..."
-
-            git commit -m "{{inputs.parameters.commit-message}}" 
-
-            echo "Pushing changes to the repository..."
-
-            git push
-            https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git
-            HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
-
-            if [ $? -eq 0 ]; then
-              echo "Successfully committed and pushed the changes to the repository."
-            else
-              echo "Failed to commit and push the changes to the repository."
-              exit 1
-            fi
+            echo "Pushing changes to the repository..." && git push https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
         workingDir: /work # Working directory
         env:
           - name: GITHUB_TOKEN # GitHub token - Required for pushing changes to the repository
@@ -719,9 +705,10 @@ spec:
             cpu: "2"
             memory: 4Gi
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
-    - name: start-argocd-sync
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
+
+    - name: start-argocd-sync # Starts the Argo CD sync for the application
       inputs:
         parameters:
           - name: app-name
@@ -735,32 +722,18 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing dependencies..."
-
-            apt-get update && apt-get install -y curl sudo
+            echo "Installing dependencies..." && apt-get update && apt-get install -y curl sudo
 
             curl -sSL -o argocd-linux-amd64
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 # Download Argo CD
 
-            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd # Install Argo CD
 
-            rm argocd-linux-amd64
+            rm argocd-linux-amd64 # Remove the downloaded file
 
-            echo "Logging in to Argo CD..."
+            echo "Logging in to Argo CD..." && argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
 
-            argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password
-            $ARGOCD_PASSWORD --insecure
-
-            echo "Syncing the application..."
-
-            argocd app sync {{inputs.parameters.app-name}}
-
-            if [ $? -eq 0 ]; then
-              echo "Successfully synced the Argo CD application."
-            else
-              echo "Failed to sync the Argo CD application."
-              exit 1
-            fi
+            echo "Syncing the application..." && argocd app sync {{inputs.parameters.app-name}}
         env:
           - name: ARGOCD_SERVER # Argo CD server URL
             valueFrom:
@@ -782,7 +755,7 @@ spec:
             cpu: "2"
             memory: 4Gi
 
-  entrypoint: main
+  entrypoint: main # Entry point template for the workflow
   arguments:
     parameters:
       - name: repo
@@ -895,5 +868,5 @@ spec:
           - ReadWriteOnce # Read-write access mode
         resources:
           requests:
-            storage: 30Gi # Storage size
+            storage: 10Gi # Storage size
       status: {}
