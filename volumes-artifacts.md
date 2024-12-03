@@ -176,3 +176,14 @@ spec:
 ```
 
 Source: https://github.com/argoproj/argo-workflows/blob/main/examples/volumes-pvc.yaml
+
+#### Resources
+
+- https://argo-workflows.readthedocs.io/en/latest/walk-through/artifacts/
+- https://argo-workflows.readthedocs.io/en/latest/walk-through/volumes/
+- https://argo-workflows.readthedocs.io/en/latest/configure-artifact-repository/
+- https://kubernetes.io/docs/concepts/storage/volumes/
+- https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+- https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/
+- https://argo-workflows.readthedocs.io/en/latest/fields/#volume
+- https://argo-workflows.readthedocs.io/en/latest/workflow-inputs/
