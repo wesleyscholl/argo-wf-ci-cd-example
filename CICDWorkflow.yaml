@@ -1,6 +1,6 @@
 # Argo Workflows - CI/CD Example Workflow Setup Guide
 #
-# Overview - To run this CI/CD workflow end-to-end, configure the following components:
+# Overview - This example demonstrates a CI/CD workflow using Argo Workflows to build, test, and deploy Argo Workflows triggered by a GitHub webhook event. To run this CI/CD workflow end-to-end, configure the following components:
 #
 # 1. WorkflowEventBinding
 #
@@ -98,21 +98,11 @@ spec:
               parameters:
                 - name: commands
                   value: >
-                    echo 'Installing dependencies...'
+                    echo 'Installing dependencies...' && apt-get update && apt-get install -y curl sudo 
 
-                    apt-get update && apt-get install -y curl sudo 
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs && npm install -g yarn@latest # Install Node.js, npm and yarn
 
-                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-
-                    apt-get install -y nodejs
-
-                    npm install -g yarn@latest 
-
-                    cd /work 
-
-                    echo 'Building Argo CLI...'
-
-                    make cli STATIC_FILES=false
+                    cd /work && echo 'Building Argo CLI...' && make cli STATIC_FILES=false # Change to the work directory, Build the Argo CLI
         - - name: create-exec-image
             template: create-image
             arguments:
@@ -519,43 +509,17 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing dependencies..." && apt-get update
+            echo "Installing dependencies..." && apt-get update && apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release sudo
 
-            apt-get install -y curl apt-transport-https ca-certificates gnupg
-            lsb-release sudo
-
-            echo "Downloading and configuring Docker..."
-
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
-            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
-            echo "deb [arch=amd64
-            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
-            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-            | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-            apt-get update && apt-get install -y docker-ce docker-ce-cli
-            containerd.io
+            echo "Downloading and configuring Docker..." && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io # Docker, CLI and containerd
 
             echo "Waiting for Docker daemon to be ready..." && until docker info; do sleep 3; done
 
-            echo "Pulling the CLI and exec images..."
+            echo "Pulling the CLI and exec images..." && docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} && docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} && docker images # Pull the exec and CLI images, verify the pulled images
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Pull the CLI image
+            echo "Tagging and pushing the images to Docker Hub..." && docker tag {{inputs.parameters.image}}{{inputs.parameters.cli-path}} {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} && docker tag {{inputs.parameters.image}}{{inputs.parameters.exec-path}} {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Tag the exec and CLI images
 
-            docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Pull the exec image
-
-            echo "Tagging and pushing the images to Docker Hub..." && docker images # Check the pulled images
-
-            docker tag {{inputs.parameters.image}}{{inputs.parameters.cli-path}} 
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Tag the CLI image
-
-            docker tag {{inputs.parameters.image}}{{inputs.parameters.exec-path}} 
-            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Tag the exec image
-
-            docker push {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Push the CLI image
-
-            docker push {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Push the exec image
+            docker push {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} && docker push {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Push the exec and CLI images
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375 # Docker host URL
@@ -603,25 +567,11 @@ spec:
           - >
             echo "Installing dependencies..." && apt-get update && apt-get install -y curl
 
-            curl -s
-            "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" 
-            | bash # Install kustomize
+            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash && mv kustomize /usr/local/bin/ && kustomize version && cd manifests/base # Install kustomize, Move kustomize to the bin directory, # Check kustomize version and move to the base directory
 
-            mv kustomize /usr/local/bin/ # Move kustomize to the bin directory
+            echo "Updating kustomization.yaml with the new image tags..." && kustomize edit set image {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}} && kustomize edit set image {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}} # Update the exec and CLI images in the kustomization.yaml
 
-            kustomize version && cd manifests/base # Check kustomize version and move to the base directory
-
-            echo "Updating kustomization.yaml with the new image tags..."
-
-            kustomize edit set image
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{inputs.parameters.image-tag}} # Update the CLI image
-
-            kustomize edit set image
-            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{inputs.parameters.image-tag}} # Update the exec image
-
-            echo "Verifying the updated kustomization.yaml..." && kustomize build . # Verify the updated kustomization.yaml
-
-            echo "Updated kustomization.yaml:" && cat kustomization.yaml # Display the updated kustomization.yaml
+            echo "Verifying the updated kustomization.yaml..." && kustomize build . && echo "Updated kustomization.yaml:" && cat kustomization.yaml # Verify and output the updated kustomization.yaml
         workingDir: /work # Working directory
         resources: # Adjust resources as needed
           requests:
@@ -647,13 +597,9 @@ spec:
           - "-c"
         args:
           - >
-            echo "Configuring git user email and name..."
+            echo "Configuring git user email and name..." && git config --global user.email "{{inputs.parameters.email}}" && git config --global user.name "{{inputs.parameters.name}}"
 
-            git config --global user.email "{{inputs.parameters.email}}" && git config --global user.name "{{inputs.parameters.name}}"
-
-            echo "Staging all changes..." && git add -A 
-
-            echo "Committing changes..." && git commit -m "{{inputs.parameters.commit-message}}" 
+            echo "Staging all changes..." && git add -A && echo "Committing changes..." && git commit -m "{{inputs.parameters.commit-message}}" 
 
             echo "Pushing changes to the repository..." && git push https://${GITHUB_TOKEN}@{{=sprig.trimPrefix("https://",workflow.parameters.repo)}}.git HEAD:{{=sprig.trimPrefix("refs/heads/",workflow.parameters.branch)}}
         workingDir: /work # Working directory
@@ -688,11 +634,7 @@ spec:
             echo "Installing dependencies..." && apt-get update && apt-get install -y curl sudo
 
             curl -sSL -o argocd-linux-amd64
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 # Download Argo CD
-
-            sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd # Install Argo CD
-
-            rm argocd-linux-amd64 # Remove the downloaded file
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64 # Download and Install Argo CD then remove the downloaded file
 
             echo "Logging in to Argo CD..." && argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
 
