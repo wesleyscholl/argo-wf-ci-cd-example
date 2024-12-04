@@ -84,7 +84,7 @@ spec:
       outputs: {}
       metadata: {}
       steps:
-        - - name: clone-repo
+        - - name: clone-repo # Clones the input repository into the shared volume
             template: clone-repo
             arguments:
               parameters:
@@ -92,7 +92,7 @@ spec:
                   value: "{{workflow.parameters.repo}}"
                 - name: branch
                   value: "{{workflow.parameters.branch}}"
-        - - name: build-cli
+        - - name: build-cli # Builds the Argo CLI
             template: golang-step
             arguments:
               parameters:
@@ -103,7 +103,7 @@ spec:
                     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs && npm install -g yarn@latest # Install Node.js, npm and yarn
 
                     cd /work && echo 'Building Argo CLI...' && make cli STATIC_FILES=false # Change to the work directory, Build the Argo CLI
-        - - name: create-exec-image
+        - - name: create-exec-image # Builds the Argo Exec image
             template: create-image
             arguments:
               parameters:
@@ -113,7 +113,7 @@ spec:
                   value: "{{workflow.parameters.image}}"
                 - name: tag
                   value: "{{workflow.parameters.tag}}"
-          - name: create-cli-image
+          - name: create-cli-image # Builds the Argo CLI image in parallel
             template: create-image
             arguments:
               parameters:
@@ -123,30 +123,21 @@ spec:
                   value: "{{workflow.parameters.image}}"
                 - name: tag
                   value: "{{workflow.parameters.tag}}"
-        - - name: run-tests
+        - - name: run-tests # Runs unit tests for Argo Workflows
             template: golang-step
             arguments:
               parameters:
                 - name: commands
                   value: >
-                    echo 'Running unit tests...'
-
-                    make test STATIC_FILES=false GOTEST='go test -p 20
-                    -covermode=atomic -coverprofile=coverage.out'
-        - - name: run-coverage
+                    echo 'Running unit tests...' && make test STATIC_FILES=false GOTEST='go test -p 20 -covermode=atomic -coverprofile=coverage.out' # Run unit tests
+        - - name: run-coverage # Collects code coverage for Argo Workflows
             template: golang-step
             arguments:
               parameters:
                 - name: commands
                   value: >
-                    echo 'Collecting code coverage...'
-
-                    make coverage STATIC_FILES=false 
-
-                    echo 'Code coverage report:'
-
-                    go tool cover -func=coverage.out
-        - - name: e2e-tests-dag
+                    echo 'Collecting code coverage...'&& make coverage STATIC_FILES=false && echo 'Code coverage report:' && go tool cover -func=coverage.out # Run and collect code coverage
+        - - name: e2e-tests-dag # Runs E2E tests in parallel
             template: e2e-tests-dag
             arguments:
               parameters:
@@ -165,10 +156,10 @@ spec:
                 - name: use-api
                   value: "{{item.use-api}}"
             withParam: "{{workflow.parameters.test-matrix}}"
-        - - name: approval
+        - - name: approval # Manual approval task to proceed with the deployment
             template: approval
             arguments: {}
-        - - name: docker-tag-push
+        - - name: docker-tag-push # Tags and pushes the tested images to Docker Hub
             template: docker-tag-push
             arguments:
               parameters:
@@ -178,7 +169,7 @@ spec:
                   value: "{{workflow.parameters.exec-path}}"
                 - name: cli-path
                   value: "{{workflow.parameters.cli-path}}"
-        - - name: update-manifests
+        - - name: update-manifests # Updates the kustomization.yaml with the new image tags
             template: update-manifests
             arguments:
               parameters:
@@ -190,7 +181,7 @@ spec:
                   value: "{{workflow.parameters.exec-path}}"
                 - name: image-tag
                   value: "{{workflow.parameters.tag}}"
-        - - name: commit-manifests
+        - - name: commit-manifests # Commits and pushes the updated kustomization.yaml to the git repository
             template: commit-manifests
             arguments:
               parameters:
@@ -200,7 +191,7 @@ spec:
                   value: "{{workflow.parameters.name}}"
                 - name: email
                   value: "{{workflow.parameters.email}}"
-        - - name: start-argocd-sync
+        - - name: start-argocd-sync # Starts the Argo CD sync for the application
             template: start-argocd-sync
             arguments:
               parameters:
@@ -216,14 +207,14 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: alpine/git:v2.26.2
+        image: alpine/git:v2.26.2 # Git image for cloning the repository
         args:
           - clone
-          - "--depth"
+          - "--depth" # Depth of the clone
           - "1" # Shallow clone for faster cloning
-          - "--branch"
+          - "--branch" # Branch name
           - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}' # Trims 'refs/heads/' from the webhook payload to the 'main' branch
-          - "--single-branch"
+          - "--single-branch" # Single branch clone
           - "{{inputs.parameters.repo}}" # https://github.com/argoproj/argo-workflows
           - .
         workingDir: /work # Working directory
@@ -232,8 +223,8 @@ spec:
             cpu: "1"
             memory: 2Gi
         volumeMounts: # Shared volume mounts between tasks
-          - name: work
-            mountPath: /work
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
 
     - name: golang-step # Reusable Go step for building, testing, and running Go commands
       inputs:
@@ -243,7 +234,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: golang:1.23
+        image: golang:1.23 # Go image for building Go projects
         command:
           - /bin/sh
           - "-c"
@@ -251,7 +242,7 @@ spec:
           - "{{inputs.parameters.commands}}" # Parameterized step commands
         workingDir: /work/ # Working directory
         env:
-          - name: GO111MODULE
+          - name: GO111MODULE # Go modules environment variable
             value: "on" # Enable Go modules
         resources: # Adjust resources as needed
           requests:
@@ -271,28 +262,28 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: moby/buildkit:v0.9.3-rootless
+        image: moby/buildkit:v0.9.3-rootless # Buildkit image for building Docker images
         command:
-          - buildctl-daemonless.sh
+          - buildctl-daemonless.sh # Buildkit daemonless script, required for rootless mode
         args:
-          - build
-          - "--frontend"
-          - dockerfile.v0
-          - "--local"
+          - build # Build command
+          - "--frontend" # Frontend for the build
+          - dockerfile.v0 # Dockerfile frontend
+          - "--local" # Local build
           - context=. # Context path
-          - "--local"
+          - "--local" # Local build
           - dockerfile=. # Dockerfile path
           - "--output" # Creates image with tag and pushes to registry
           - >- # Image prefix, name and tag - e.g., quay.io/argoproj/argoexec:latest
             type=image,name={{inputs.parameters.image}}{{inputs.parameters.path}}:{{inputs.parameters.tag}},push=true
-          - "--opt"
+          - "--opt" # Build options
           - target={{inputs.parameters.path}} # Target path (e.g., argocli or argoexec)
         workingDir: /work/ # Working directory
         env:
-          - name: BUILDKITD_FLAGS # Disable process sandbox
-            value: "--oci-worker-no-process-sandbox"
+          - name: BUILDKITD_FLAGS # Buildkit flags environment variable
+            value: "--oci-worker-no-process-sandbox" # Disable process sandbox
           - name: DOCKER_CONFIG # Pass in the docker config as an environment variable
-            value: /.docker
+            value: /.docker # Docker config path
         resources: # Adjust as needed
           requests:
             cpu: "16"
@@ -327,7 +318,7 @@ spec:
       metadata: {}
       dag:
         tasks:
-          - name: prepare-deploy-to-cluster-run-e2e-tests
+          - name: prepare-deploy-to-cluster-run-e2e-tests # Prepare and deploy to the cluster to run E2E tests
             template: e2e-test
             arguments:
               parameters:
@@ -347,11 +338,11 @@ spec:
                   value: "{{inputs.parameters.use-api}}"
           - name: failed-e2e-test # Exit handler for failed E2E tests
             template: exit-handler # Exit handler template
-            dependencies:
-              - prepare-deploy-to-cluster-run-e2e-tests # Exit handler dependency
+            dependencies: # Exit handler dependency
+              - prepare-deploy-to-cluster-run-e2e-tests # Exit handler requires the E2E tests task
             when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Exit handler condition - only runs when the E2E tests fail
 
-    - name: prepare-deploy-to-cluster-run-e2e-tests
+    - name: prepare-deploy-to-cluster-run-e2e-tests # Prepare and deploy to the cluster to run E2E tests
       inputs:
         parameters:
           - name: image
