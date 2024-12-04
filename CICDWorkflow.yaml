@@ -336,11 +336,11 @@ spec:
                   value: "{{inputs.parameters.profile}}"
                 - name: use-api
                   value: "{{inputs.parameters.use-api}}"
-          - name: failed-e2e-test # Exit handler for failed E2E tests
-            template: exit-handler # Exit handler template
-            dependencies: # Exit handler dependency
-              - prepare-deploy-to-cluster-run-e2e-tests # Exit handler requires the E2E tests task
-            when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Exit handler condition - only runs when the E2E tests fail
+          - name: failed-e2e-test # Failure template for failed E2E tests
+            template: failed-e2e-test # Failure template template
+            dependencies: # Failure template dependency
+              - prepare-deploy-to-cluster-run-e2e-tests # Failure template requires the E2E tests task
+            when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Failure template condition - only runs when the E2E tests fail
 
     - name: prepare-deploy-to-cluster-run-e2e-tests # Prepare and deploy to the cluster to run E2E tests
       inputs:
@@ -642,6 +642,42 @@ spec:
         resources: # Adjust resources as needed
           requests:
             cpu: "2"
+            memory: 4Gi
+
+    - name: failed-e2e-test # Failure template for failed E2E tests
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest # Ubuntu image for the exit handler
+        command:
+          - bash
+          - "-c"
+        args:
+          - >
+            echo "Installing dependencies..." && apt-get update && apt-get install -y curl sudo systemd
+
+            echo "Installing kubectl..." && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && mv kubectl /usr/local/bin/ 
+
+            echo "Failure debug - k3s logs:" && journalctl -u k3s
+
+            echo "Failure debug - Describe MinIO/MySQL deployment:" && set -eux && kubectl get deploy && kubectl describe deploy
+
+            echo "Failure debug - Describe MinIO/MySQL pods:" && kubectl get pods -l '!workflows.argoproj.io/workflow' && kubectl describe pods -l '!workflows.argoproj.io/workflow'
+
+            echo "Failure debug - MinIO/MySQL logs:" && kubectl logs -l '!workflows.argoproj.io/workflow' --prefix
+
+            echo "Failure debug - Controller/API logs:" && [ -e /tmp/argo.log ] && cat /tmp/argo.log || echo "No logs found"
+
+            echo "Failure debug - Describe Workflows:" && kubectl get wf && kubectl describe wf
+
+            echo "Failure debug - Describe Workflow pods:" && kubectl get pods -l workflows.argoproj.io/workflow && kubectl describe pods -l workflows.argoproj.io/workflow
+
+            echo "Failure debug - Workflow Pod logs:" && kubectl logs --all-containers -l workflows.argoproj.io/workflow --prefix
+        resources: # Adjust resources as needed
+          requests:
+            cpu: "4"
             memory: 4Gi
 
   entrypoint: main # Entry point template for the workflow
