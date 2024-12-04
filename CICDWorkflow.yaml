@@ -137,7 +137,7 @@ spec:
                 - name: commands
                   value: >
                     echo 'Collecting code coverage...'&& make coverage STATIC_FILES=false && echo 'Code coverage report:' && go tool cover -func=coverage.out # Run and collect code coverage
-        - - name: e2e-tests-dag # Runs E2E tests in parallel
+        - - name: e2e-tests-dag # Runs E2E tests in parallel, withParam loops through the test matrix creating a task for each test
             template: e2e-tests-dag
             arguments:
               parameters:
@@ -342,7 +342,7 @@ spec:
               - prepare-deploy-to-cluster-run-e2e-tests # Failure template requires the E2E tests task
             when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Failure template condition - only runs when the E2E tests fail
 
-    - name: prepare-deploy-to-cluster-run-e2e-tests # Prepare and deploy to the cluster to run E2E tests
+    - name: e2e-test # Prepare and deploy to the cluster to run E2E tests
       inputs:
         parameters:
           - name: image
