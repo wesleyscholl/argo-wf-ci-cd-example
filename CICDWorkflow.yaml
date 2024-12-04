@@ -307,40 +307,166 @@ spec:
     - name: e2e-tests-dag # DAG for running E2E tests in parallel
       inputs:
         parameters:
-          - name: image
-          - name: exec-path
-          - name: cli-path
           - name: test
-          - name: install_k3d_version
-          - name: profile
-          - name: use-api
       outputs: {}
       metadata: {}
       dag:
         tasks:
           - name: prepare-deploy-to-cluster-run-e2e-tests # Prepare and deploy to the cluster to run E2E tests
-            template: e2e-test
+            template: generic-ubuntu # Generic Ubuntu image for running tasks
             arguments:
               parameters:
-                - name: image
-                  value: "{{inputs.parameters.image}}"
-                - name: exec-path
-                  value: "{{inputs.parameters.exec-path}}"
-                - name: cli-path
-                  value: "{{inputs.parameters.cli-path}}"
                 - name: test
                   value: "{{inputs.parameters.test}}"
-                - name: install_k3d_version
-                  value: "{{inputs.parameters.install_k3d_version}}"
-                - name: profile
-                  value: "{{inputs.parameters.profile}}"
-                - name: use-api
-                  value: "{{inputs.parameters.use-api}}"
+                - name: commands
+                  value: >
+                    echo "Installing dependencies..."
+                - name: cpu
+                  value: "16"
+                - name: memory
+                  value: "16Gi"
+                - name: install-dependencies
+                  value: true
+                - name: extra-dependencies
+                  value: []
+                - name: working-dir
+                  value: /work/{{inputs.parameters.test}}/
+
           - name: failed-e2e-test # Failure template for failed E2E tests
-            template: failed-e2e-test # Failure template template
+            template: generic-ubuntu # Generic Ubuntu image for running tasks
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo "E2E tests failed. Please check the logs for more details." # Failure message
+                - name: cpu
+                  value: "2"
+                - name: memory
+                  value: "4Gi"
+                - name: working-dir
+                  value: /work/{{inputs.parameters.test}}/
             dependencies: # Failure template dependency
               - prepare-deploy-to-cluster-run-e2e-tests # Failure template requires the E2E tests task
             when: "{{tasks.prepare-deploy-to-cluster-run-e2e-tests.outputs.result}} != 'Succeeded'" # Failure template condition - only runs when the E2E tests fail
+
+    - name: generic-ubuntu # Generic Ubuntu image for running tasks
+      inputs:
+        parameters:
+          - name: image
+            default: "{{workflow.parameters.image}}"
+            description: "Docker image prefix"
+          - name: exec-path
+            default: "{{workflow.parameters.exec-path}}"
+          - name: cli-path
+            default: "{{workflow.parameters.cli-path}}"
+          - name: test
+            default: "test-executor"
+          - name: install_k3d_version
+            default: "v1.31.0-k3s1"
+          - name: profile
+            default: "minimal"
+          - name: use-api
+            default: false
+          - name: image-tag
+            default: "{{workflow.parameters.tag}}"
+          - name: app-name
+            default: "{{workflow.parameters.path}}"
+          - name: commands
+            description: "Commands to run"
+          - name: cpu
+            default: "2"
+          - name: memory
+            default: "4Gi"
+          - name: install-dependencies
+            default: true
+            description: "Whether to run standard dependency installation"
+          - name: extra-dependencies
+            default: []
+            description: "List of additional packages to install"
+          - name: working-dir
+            default: "/work"
+            description: "Working directory"
+
+      podSpecPatch: |
+        containers:
+          - name: main
+            resources:
+              requests:
+                cpu: "{{workflow.parameters.cpu}}"
+                memory: "{{workflow.parameters.memory}}"
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest # Ubuntu image for running tasks
+        command:
+          - sh
+          - "-c"
+        args:
+          - |
+            set -euo pipefail  # Strict error handling
+
+            # Standard dependency installation
+            if {{inputs.parameters.install-dependencies}}; then
+              echo "Installing base dependencies..."
+              apt-get update && apt-get install -y \
+                curl \
+                wget \
+                git \
+                ca-certificates \
+                gnupg \
+                lsb-release \
+                software-properties-common \
+                apt-transport-https
+            fi
+
+            # Install extra dependencies if specified
+            if [ "{{inputs.parameters.extra-dependencies}}" != "[]" ]; then
+              apt-get install -y {{inputs.parameters.extra-dependencies}}
+            fi
+
+            # Execute the provided script
+            {{inputs.parameters.script}}
+        workingDir: "{{inputs.parameters.working-dir}}" # Working directory
+        env:
+          - name: DOCKER_HOST # Docker host URL
+            value: tcp://localhost:2375 # Docker host URL
+          - name: DOCKER_CONFIG # Docker config path
+            value: /.docker # Docker config path
+          - name: ARGOCD_SERVER # Argo CD server URL - Required for login
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
+                name: argocd-env-secret # Secret name
+                key: server # Secret key
+          - name: ARGOCD_USERNAME # Argo CD username - Required for login
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
+                name: argocd-env-secret # Secret name
+                key: username # Secret key
+          - name: ARGOCD_PASSWORD # Argo CD password - Required for login
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
+                name: argocd-env-secret # Secret name
+                key: password # Secret key
+        volumeMounts: # Shared volume mounts between tasks
+          - name: work # Shared working volume
+            mountPath: /work # Mount path
+          - name: docker-config # Ensure to mount this volume - it holds the Docker registry API key
+            mountPath: /.docker # Using this mount path
+      volumes:
+        - name: docker-config # Ensure this volume is configured
+          secret:
+            secretName: docker-config # This secret holds the API key to your Docker registry
+      sidecars: # Docker dind sidecar
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR # Docker TLS cert directory
+          resources: {}
+          securityContext: # Security context
+            privileged: true # Privileged mode
+          mirrorVolumeMounts: true # Mirror volume mounts between sidecars and containers
+          condition: "{{inputs.parameters.docker-enabled}}"
 
     - name: e2e-test # Prepare and deploy to the cluster to run E2E tests
       inputs:
@@ -645,7 +771,9 @@ spec:
             memory: 4Gi
 
     - name: failed-e2e-test # Failure template for failed E2E tests
-      inputs: {}
+      inputs:
+        parameters:
+          - name: test
       outputs: {}
       metadata: {}
       container:
@@ -660,21 +788,21 @@ spec:
 
             echo "Installing kubectl..." && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && mv kubectl /usr/local/bin/ 
 
-            echo "Failure debug - k3s logs:" && journalctl -u k3s
+            echo "Failure debug {{inputs.parameters.test}} - k3s logs:" && journalctl -u k3s
 
-            echo "Failure debug - Describe MinIO/MySQL deployment:" && set -eux && kubectl get deploy && kubectl describe deploy
+            echo "Failure debug {{inputs.parameters.test}} - Describe MinIO/MySQL deployment:" && set -eux && kubectl get deploy && kubectl describe deploy
 
-            echo "Failure debug - Describe MinIO/MySQL pods:" && kubectl get pods -l '!workflows.argoproj.io/workflow' && kubectl describe pods -l '!workflows.argoproj.io/workflow'
+            echo "Failure debug {{inputs.parameters.test}} - Describe MinIO/MySQL pods:" && kubectl get pods -l '!workflows.argoproj.io/workflow' && kubectl describe pods -l '!workflows.argoproj.io/workflow'
 
-            echo "Failure debug - MinIO/MySQL logs:" && kubectl logs -l '!workflows.argoproj.io/workflow' --prefix
+            echo "Failure debug {{inputs.parameters.test}} - MinIO/MySQL logs:" && kubectl logs -l '!workflows.argoproj.io/workflow' --prefix
 
-            echo "Failure debug - Controller/API logs:" && [ -e /tmp/argo.log ] && cat /tmp/argo.log || echo "No logs found"
+            echo "Failure debug {{inputs.parameters.test}} - Controller/API logs:" && [ -e /tmp/argo.log ] && cat /tmp/argo.log || echo "No logs found"
 
-            echo "Failure debug - Describe Workflows:" && kubectl get wf && kubectl describe wf
+            echo "Failure debug {{inputs.parameters.test}} - Describe Workflows:" && kubectl get wf && kubectl describe wf
 
-            echo "Failure debug - Describe Workflow pods:" && kubectl get pods -l workflows.argoproj.io/workflow && kubectl describe pods -l workflows.argoproj.io/workflow
+            echo "Failure debug {{inputs.parameters.test}} - Describe Workflow pods:" && kubectl get pods -l workflows.argoproj.io/workflow && kubectl describe pods -l workflows.argoproj.io/workflow
 
-            echo "Failure debug - Workflow Pod logs:" && kubectl logs --all-containers -l workflows.argoproj.io/workflow --prefix
+            echo "Failure debug {{inputs.parameters.test}} - Workflow Pod logs:" && kubectl logs --all-containers -l workflows.argoproj.io/workflow --prefix
         resources: # Adjust resources as needed
           requests:
             cpu: "4"
