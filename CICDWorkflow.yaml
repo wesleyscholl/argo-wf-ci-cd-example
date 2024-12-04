@@ -381,16 +381,11 @@ spec:
           - "-c"
         args:
           - >
-            echo "Installing dependencies..." && apt-get update
-
-            apt-get install -y curl apt-transport-https ca-certificates gnupg
-            lsb-release sudo golang make socat git
+            echo "Installing dependencies..." && apt-get update && apt-get install -y curl apt-transport-https ca-certificates gnupg lsb-release sudo golang make socat git
 
             echo "export PATH=$PATH:/usr/local/go/bin" | tee -a # Add Go to the PATH
 
-            go version && make --version # Check Go and Make versions
-
-            sudo apt-get install -y lsof # Install lsof for checking controller/API status
+            go version && make --version && sudo apt-get install -y lsof # Check Go and Make versions, install lsof to check controller/API status
 
             echo "Installing k3d..." && curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
 
@@ -398,18 +393,9 @@ spec:
 
             chmod +x kubectl && mv kubectl /usr/local/bin/ # Make kubectl executable, move kubectl to the bin directory
 
-            echo "Downloading and configuring Docker..."
+            echo "Downloading and configuring Docker..." && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
-            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-
-            echo "deb [arch=amd64
-            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
-            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-            | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-            apt-get update && apt-get install -y docker-ce docker-ce-cli
-            containerd.io
+            echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io # Install Docker, CLI and containerd
 
             echo "Waiting for Docker daemon to be ready..." && until docker info; do sleep 3; done
 
@@ -431,24 +417,13 @@ spec:
 
             echo "Waiting for k3d cluster to be ready..." && until kubectl cluster-info; do sleep 3; done
 
-            echo "k3d is ready, Merging kubeconfig and switching context to k3d cluster..."
+            echo "k3d is ready, Merging kubeconfig and switching context to k3d cluster..." && k3d kubeconfig merge argocluster --kubeconfig-switch-context && kubectl version # Check kubectl version
 
-            k3d kubeconfig merge argocluster --kubeconfig-switch-context && kubectl version # Check kubectl version
+            echo "Pulling images from docker hub..." && docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} && docker pull {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Pull the exec and CLI images
 
-            echo "Pulling images from docker hub..." && docker pull {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} # Pull the exec image
+            docker images && echo "Loading images into k3s cluster..." && docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar && docker save {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} -o /tmp/argocli.tar # Save the exec and CLI images
 
-            docker pull
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} # Pull the CLI image
-
-            docker images && echo "Loading images into k3s cluster..." && docker save {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -o /tmp/argoexec.tar # Save the exec image
-
-            docker save
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
-            -o /tmp/argocli.tar # Save the CLI image
-
-            set -eux # Exit on error, verbose output mode
-
-            docker load < /tmp/argoexec.tar && docker load < /tmp/argocli.tar # Load the exec and CLI images
+            set -eux && docker load < /tmp/argoexec.tar && docker load < /tmp/argocli.tar # # Exit on error, verbose output mode, Load the exec and CLI images
 
             k3d image import
             {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
@@ -458,21 +433,15 @@ spec:
             {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
             -c argocluster # Import the CLI image into k3d
 
-            echo "Setting up the hosts file..."
-
-            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
-
-            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
-
-            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
-
-            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
-
-            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+            echo "Setting up the hosts file..." && sudo tee -a /etc/hosts <<EOF
+            127.0.0.1 dex
+            127.0.0.1 minio
+            127.0.0.1 postgres
+            127.0.0.1 mysql
+            127.0.0.1 azurite
+            EOF
 
             echo "Installing manifests..." && make install PROFILE={{inputs.parameters.profile}} STATIC_FILES=false
-
-            kubectl get pods -n argo # Check the pods in the argo namespace
 
             echo "Building the controller..." && make controller kit STATIC_FILES=false
 
@@ -480,18 +449,12 @@ spec:
               echo "Building the CLI..." && make cli STATIC_FILES=false
             fi
 
-            echo "Starting argo workflow controller & API..."
-
-            make start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client
-            STATIC_FILES=false LOG_LEVEL=info API={{inputs.parameters.use-api}}
-            UI=false POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+            echo "Starting argo workflow controller & API..." && make start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client STATIC_FILES=false LOG_LEVEL=info API={{inputs.parameters.use-api}} UI=false POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
 
             make wait PROFILE={{inputs.parameters.profile}}
             API={{inputs.parameters.use-api}} # Wait for the controller to start
 
             echo "Wait for MinIO..." && until lsof -i :9000 > /dev/null ; do sleep 10s ; done
-
-            kubectl get pods -n argo # Check the pods in the argo namespace
 
             echo "Running E2E {{inputs.parameters.test}} tests..." && make {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
         workingDir: /work/{{inputs.parameters.test}}/ # Working directory - separate for each test
