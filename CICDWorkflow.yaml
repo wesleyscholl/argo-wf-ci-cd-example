@@ -356,7 +356,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: ubuntu:latest
+        image: ubuntu:latest # Ubuntu image for running E2E tests
         command:
           - sh
           - "-c"
@@ -406,13 +406,7 @@ spec:
 
             set -eux && docker load < /tmp/argoexec.tar && docker load < /tmp/argocli.tar # # Exit on error, verbose output mode, Load the exec and CLI images
 
-            k3d image import
-            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
-            -c argocluster # Import the exec image into k3d
-
-            k3d image import
-            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
-            -c argocluster # Import the CLI image into k3d
+            k3d image import {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}} -c argocluster && k3d image import {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}} -c argocluster # Import the exec and CLI images into k3d
 
             echo "Setting up the hosts file..." && sudo tee -a /etc/hosts <<EOF
             127.0.0.1 dex
@@ -494,7 +488,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: ubuntu:latest
+        image: ubuntu:latest # Ubuntu image for tagging and pushing the images
         command:
           - sh
           - "-c"
@@ -550,7 +544,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: ubuntu:latest
+        image: ubuntu:latest # Ubuntu image for updating the kustomization.yaml
         command:
           - sh
           - "-c"
@@ -582,7 +576,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: alpine/git:v2.26.2
+        image: alpine/git:v2.26.2 # Git image for committing and pushing changes
         command:
           - sh
           - "-c"
@@ -596,8 +590,8 @@ spec:
         workingDir: /work # Working directory
         env:
           - name: GITHUB_TOKEN # GitHub token - Required for pushing changes to the repository
-            valueFrom:
-              secretKeyRef:
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
                 name: github-token # Secret name
                 key: token # Secret key
         resources: # Adjust resources as needed
@@ -616,7 +610,7 @@ spec:
       metadata: {}
       container:
         name: ""
-        image: ubuntu:latest
+        image: ubuntu:latest # Ubuntu image for starting the Argo CD sync
         command:
           - sh
           - "-c"
@@ -624,26 +618,25 @@ spec:
           - >
             echo "Installing dependencies..." && apt-get update && apt-get install -y curl sudo
 
-            curl -sSL -o argocd-linux-amd64
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64 # Download and Install Argo CD then remove the downloaded file
+            curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64 # Download and Install Argo CD then remove the downloaded file
 
             echo "Logging in to Argo CD..." && argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
 
             echo "Syncing the application..." && argocd app sync {{inputs.parameters.app-name}}
         env:
-          - name: ARGOCD_SERVER # Argo CD server URL
-            valueFrom:
-              secretKeyRef:
+          - name: ARGOCD_SERVER # Argo CD server URL - Required for login
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
                 name: argocd-env-secret # Secret name
                 key: server # Secret key
           - name: ARGOCD_USERNAME # Argo CD username - Required for login
-            valueFrom:
-              secretKeyRef:
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
                 name: argocd-env-secret # Secret name
                 key: username # Secret key
           - name: ARGOCD_PASSWORD # Argo CD password - Required for login
-            valueFrom:
-              secretKeyRef:
+            valueFrom: # Value from the secret
+              secretKeyRef: # Secret key reference
                 name: argocd-env-secret # Secret name
                 key: password # Secret key
         resources: # Adjust resources as needed
@@ -760,9 +753,9 @@ spec:
         name: work # Shared volume claim name
         creationTimestamp: null
       spec:
-        accessModes:
+        accessModes: # Persistent volume access modes
           - ReadWriteOnce # Read-write access mode
-        resources:
-          requests:
+        resources: # Persistent volume resources
+          requests: # Persistent volume requests
             storage: 10Gi # Storage size
       status: {}
