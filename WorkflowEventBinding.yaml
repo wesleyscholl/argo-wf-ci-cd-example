@@ -1,25 +1,30 @@
+kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowEventBinding
 metadata:
-  name: event-consumer
-  namespace: argo-events
+  name: webhook-event-consumer
+  namespace: argo
 spec:
   event:
-    selector: payload.repo != "" && payload.branch != "" && payload.pusher.name != "" && payload.pusher.email != "" # To evaluate properties and values within the payload
-  submit:
-    workflowTemplateRef:
-      name: buildkit # Name of the WorkflowTemplate to trigger
+    selector: payload.repository.html_url != "" && payload.ref != "" && payload.pusher.name != "" && payload.pusher.email != "" && payload.repository.name != "" # Selector to evaluate properties and values within the payload - Ensures that the payload contains the required properties
+  submit: # Workflow action when the event is triggered
+    workflowTemplateRef: # Reference to the WorkflowTemplate to trigger
+      name: ci-cd-workflow # Name of the WorkflowTemplate to trigger
     arguments:
       parameters: # Parameters to pass to the WorkflowTemplate
-        - name: repo
+        - name: repo # GitHub url
           valueFrom:
-            event: payload.repository.html_url # GitHub url
-        - name: branch
+            event: payload.repository.html_url # i.e. https://github.com/argoproj/argo-workflows
+        - name: branch # GitHub ref branch
           valueFrom:
-            event: payload.ref # GitHub ref branch
-        - name: name
+            event: payload.ref # i.e. refs/heads/main
+        - name: name # GitHub user name
           valueFrom:
-            event: payload.pusher.name # GitHub user name
-        - name: email
+            event: payload.pusher.name # i.e. wesleyscholl
+        - name: email # GitHub user email
           valueFrom:
-            event: payload.pusher.email # GitHub user email
+            event: payload.pusher.email # i.e. 128409641+wesleyscholl@users.noreply.github.com
+        - name: path # GitHub repository name
+          valueFrom:
+            event: payload.repository.name # i.e. argo-workflows
+EOF

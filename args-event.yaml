@@ -25,3 +25,26 @@ spec:
 ```
 
 Then they are accessible for use within the `git-clone` template.
+
+
+
+
+
+
+---
+
+curl -X POST -k https://localhost:2746/api/v1/events/argo/ -d '{"repository":{"html_url":"https://github.com/konjo-open-src/argo-workflows.git", "name": "argo-workflows"}, "ref": "refs/heads/main", "pusher":{"name": "wesleyscholl","email":"128409641+wesleyscholl@users.noreply.github.com"}}'
+
+
+curl -k http://rnvme-208-185-39-254.a.free.pinggy.link/api/v1/events/argo/ -d '{"repository":{"html_url":"https://github.com/konjo-open-src/argo-workflows.git", "name": "argo-workflows"}, "ref": "refs/heads/main", "pusher":{"name": "wesleyscholl","email":"128409641+wesleyscholl@users.noreply.github.com"}}'
+
+---
+
+kubectl patch deployment \
+  argo-server \
+  --namespace argo \
+  --type='json' \
+  -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": [
+  "server",
+  "--auth-mode=server"
+]}]'
