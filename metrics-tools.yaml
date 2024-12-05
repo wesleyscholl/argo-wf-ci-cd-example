@@ -1,0 +1,33 @@
+@tanken 
+
+You are correct. Currently, the Kubernetes Vertical Pod Autoscaler (VPA) does not support custom Argo Workflows resources like `Workflow` or `CronWorkflow` for recommendations. However, there are some alternative approaches:
+
+1. **Kubernetes Metrics and Tools**:
+   * **Kubernetes Metrics Server** or **Prometheus** can monitor resource utilization for workflow pods. Based on these metrics, manual resource requests and limits can optimize workflow usage and performance.
+   * If **Kubernetes Metrics Server** is installed:
+      - Tools like `kubectl top` can provide quick insights into real-time CPU and memory usage.
+      
+      Example:
+      ```bash
+      kubectl top pods -n <namespace>
+      ```
+      Example Output:
+      ```
+      NAME                                CPU(cores)   MEMORY(bytes)
+      my-pod-1                            1m           20Mi
+      my-pod-2                            2m           30Mi
+      ```
+
+2. **Third-Party Tools**:
+   * Tools like **Goldilocks** (built on VPA), can analyze existing Kubernetes workloads to provide the "right-size" recommendations for CPU and memory requests. Although **Goldilocks** may not natively support Argo Workflows, it can monitor the underlying Kubernetes pods to determine optimal resource settings.
+
+**Resources**:
+
+- Kubernetes Tools for Monitoring Resources - https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-usage-monitoring/#resource-metrics-pipeline
+- Kubernetes Metrics Server - https://github.com/kubernetes-sigs/metrics-server
+- Autoscaling Workloads - https://kubernetes.io/docs/concepts/workloads/autoscaling/
+- Vertical Pod Autoscaler - https://github.com/kubernetes/autoscaler/tree/9f87b78df0f1d6e142234bb32e8acbd71295585a/vertical-pod-autoscaler
+- Kubernetes Horizontal Pod Autoscaling - https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+- kubectl - https://kubernetes.io/docs/reference/kubectl/
+- Prometheus - https://prometheus.io/
+- Goldilocks - https://github.com/FairwindsOps/goldilocks
