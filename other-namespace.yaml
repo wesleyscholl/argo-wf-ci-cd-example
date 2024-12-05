@@ -1,0 +1,262 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cross-namespace-workflow-access
+  namespace: other-namespace
+subjects:
+- kind: ServiceAccount
+  name: argo # Replace with the service account name in the current namespace
+  namespace: argo
+roleRef:
+  kind: Role
+  name: argo-role  # A Role with `create` permissions on workflows in this namespace
+  apiGroup: rbac.authorization.k8s.io
+
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cross-namespace-workflow-access
+  namespace: other-namespace
+subjects:
+- kind: ServiceAccount
+  name: argo
+  namespace: argo
+roleRef:
+  kind: Role
+  name: argo-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: other-namespace
+  name: argo-role
+rules:
+- apiGroups: ["argoproj.io"]
+  resources: ["workflowtemplates"]
+  verbs: ["create", "get", "list"]
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: other-namespace
+  name: argo-cross-namespace-binding
+subjects:
+- kind: ServiceAccount
+  name: argo
+  namespace: argo
+roleRef:
+  kind: Role
+  name: argo-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-role-binding
+  namespace: other-namespace 
+subjects:
+  - kind: ServiceAccount
+    name: argo
+    namespace: argo  
+roleRef:
+  kind: Role
+  name: argo-role  
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo
+  namespace: other-namespace
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: other-namespace
+  name: argo-role
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflowtemplates
+    verbs:
+      - get
+      - list
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - create
+      - update
+      - delete
+      - watch
+      - patch
+EOF
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-role-binding
+  namespace: other-namespace
+subjects:
+  - kind: ServiceAccount
+    name: argo
+    namespace: other-namespace  
+roleRef:
+  kind: Role
+  name: argo-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+----------------------------------------
+
+Yes, it's possible to trigger a workflow template in a different namespace. Although, Argo Workflows requires configuration for cross-namespace resource manipulation. A service account, role, and role binding must be created in the target namespace to allow the triggering of workflows from another namespace. Service account permissions are typically restricted to the namespace where they are created.
+
+1. First, create the other namespace:
+
+```bash
+kubectl create namespace other-namespace # Replace with the target namespace
+```
+
+2. Create a service account in the other namespace:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo 
+  namespace: other-namespace # Replace with the target namespace
+```
+
+3. Create a role in the other namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: other-namespace # Replace with the target namespace
+  name: argo-role # Name of the role
+rules:
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - workflowtemplates # The service account requires workflowtemplates permissions 
+    verbs:
+      - get
+      - list
+      - create # Additional permissions for workflow template creation
+  - apiGroups:
+      - ""
+    resources:
+      - pods # Additional permissions for pod manipulation
+    verbs:
+      - get
+      - list
+      - create
+      - update
+      - delete
+      - watch
+      - patch # Important for patching pods status
+```
+
+4. Create a role binding in the other namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-role-binding # Name of the role binding
+  namespace: other-namespace 
+subjects:
+  - kind: ServiceAccount
+    name: argo
+    namespace: other-namespace # Replace with the target namespace
+roleRef:
+  kind: Role
+  name: argo-role # Matches the role name
+  apiGroup: rbac.authorization.k8s.io
+```
+
+5. Example `WorkflowTemplate` in the `argo` namespace that triggers a WorkflowTemplate in the `other-namespace` namespace:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: cross-namespace-trigger
+  namespace: argo
+spec:
+  templates:
+    - name: submit-template
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      resource:
+        action: create # Action to perform on the resource
+        manifest: |
+          apiVersion: argoproj.io/v1alpha1
+          kind: Workflow # Resource type to create
+          metadata:
+            generateName: workflow-template-in-other-namespace-
+            namespace: other-namespace # Target namespace
+          spec:
+            entrypoint: whalesay # Entrypoint of the WorkflowTemplate in the target namespace
+            workflowTemplateRef: # Reference to the WorkflowTemplate in the target namespace
+              name: workflow-template-in-other-namespace # Name of the WorkflowTemplate in the target namespace
+  entrypoint: submit-template
+  arguments: {}
+  serviceAccountName: argo # Service account in the target namespace
+```
+
+6. Example `WorkflowTemplate` in the `other-namespace` namespace that will be triggered:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: workflow-template-in-other-namespace 
+  namespace: other-namespace # Target namespace
+spec:
+  templates:
+    - name: whalesay
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ''
+        image: docker/whalesay
+        command:
+          - cowsay
+        args:
+          - Hello from another namespace!
+        resources: {}
+  entrypoint: whalesay
+  arguments: {}
+```
+
+**Resources**
+
+- [Argo Workflows Service Accounts](https://argo-workflows.readthedocs.io/en/latest/service-accounts/)
+- [Argo Workflows RBAC Configuration](https://argo-workflows.readthedocs.io/en/latest/workflow-rbac/)
+- [Argo Workflows Kubernetes Resources](https://argo-workflows.readthedocs.io/en/latest/walk-through/kubernetes-resources/)
+- [Kubernetes Documentation - Using RBAC Authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+- [Kubernetes Documentation - Service Accounts](https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/)
+- [Kubernetes Documentation - Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/)
