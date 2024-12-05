@@ -48,3 +48,16 @@ kubectl patch deployment \
   "server",
   "--auth-mode=server"
 ]}]'
+
+
+---
+
+git commit -S -s -m "docs(examples): Add comprehensive test matrix and parallel execution support - Fixes #8591
+
+- Added test matrix to cover all E2E test cases.
+- Introduced a DAG for parallel test execution to optimize runtime.
+- Updated workflow steps for improved parallelism.
+- Refactored code to use generic templates, reducing duplication and overall code length.
+- Enhanced code readability by adding detailed comments.
+- Added build step for the controller."
+
