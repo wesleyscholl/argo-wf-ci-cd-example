@@ -1,4 +1,3 @@
-kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowEventBinding
 metadata:
@@ -27,4 +26,3 @@ spec:
         - name: path # GitHub repository name
           valueFrom:
             event: payload.repository.name # i.e. argo-workflows
-EOF

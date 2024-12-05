@@ -61,3 +61,6 @@ git commit -S -s -m "docs(examples): Add comprehensive test matrix and parallel 
 - Enhanced code readability by adding detailed comments.
 - Added build step for the controller."
 
+---
+
+git commit -S -s -m "docs(examples): Add CI/CD example for building Argo Workflows - Fixes #8591"
