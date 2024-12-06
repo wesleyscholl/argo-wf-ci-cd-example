@@ -1,0 +1,78 @@
+
+
+
+The main differences between `withItems` and `withParam` in Argo Workflows are:
+
+Data source:
+- `withItems` uses a YAML list defined directly in the workflow template.
+- `withParam` takes a JSON string, typically passed from a previous step or template.
+
+Use case:
+- `withItems` is used for static, predefined lists.
+- `withParam` is more flexible and can handle dynamically generated lists.
+
+Here's a functional workflow that demonstrates both withItems and withParam:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: withitems-withparam-random-
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      steps:
+        - - name: generate-random-list
+            template: random-list-generator
+        - - name: withitems-example
+            template: print-message
+            arguments:
+              parameters:
+                - name: message
+                  value: '{{item}}'
+            withItems:
+              - Hello
+              - World
+        - - name: withparam-example
+            template: print-message
+            arguments:
+              parameters:
+                - name: message
+                  value: '{{item}}'
+            withParam: '{{steps.generate-random-list.outputs.result}}'
+    - name: random-list-generator
+      script:
+        name: ''
+        image: python:alpine3.6
+        command:
+          - python
+        source: |
+          import json
+          import random
+          import string
+
+          def random_string(length):
+              return ''.join(random.choices(string.ascii_lowercase, k=length))
+
+          num_strings = random.randint(3, 10)
+          random_list = [random_string(5) for _ in range(num_strings)]
+          print(json.dumps(random_list))
+    - name: print-message
+      inputs:
+        parameters:
+          - name: message
+      container:
+        name: ''
+        image: alpine:3.14
+        command:
+          - echo
+        args:
+          - '{{inputs.parameters.message}}'
+  entrypoint: main
+```
+
+**Resources**:
+
+- Argo Workflows Loops - https://argo-workflows.readthedocs.io/en/latest/walk-through/loops/
+- Field Reference - https://argo-workflows.readthedocs.io/en/latest/fields/#workflowstep

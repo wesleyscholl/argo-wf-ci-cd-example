@@ -1,0 +1,85 @@
+
+The original workflow produced the following error:
+
+```bash
+MESSAGE
+Pod "container-on-exit-phftp-exitContainer-1772040650" is invalid: metadata.name: Invalid value: "container-on-exit-phftp-exitContainer-1772040650": a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')
+```
+
+After updating all template names and parameters to lowercase, the workflow executed successfully:
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: container-on-exit-
+  namespace: argo
+  templates:
+    - name: step-template
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: stepA
+            template: echo1
+            arguments: {}
+            hooks:
+              exit:
+                template: exit-container # Updated to lowercase
+                arguments:
+                  parameters:
+                    - name: container-status # Updated to lowercase
+                      value: "{{steps.stepA.status}}"
+        - - name: stepB
+            template: echo2
+            arguments: {}
+            hooks:
+              exit:
+                template: exit-container # Updated to lowercase
+                arguments:
+                  parameters:
+                    - name: container-status # Updated to lowercase
+                      value: "{{steps.stepB.status}}"
+    - name: echo1
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine:3.15
+        command:
+          - sh
+          - "-c"
+        args:
+          - echo "stepA"
+        resources: {}
+    - name: echo2
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine:3.15
+        command:
+          - sh
+          - "-c"
+        args:
+          - echo "stepB" ;exit 1
+        resources: {}
+    - name: exit-container # Updated to lowercase
+      inputs:
+        parameters:
+          - name: container-status # Updated to lowercase
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine:3.15
+        command:
+          - sh
+          - "-c"
+        args:
+          - "echo  Container Status: {{inputs.parameters.container-status}}" # Updated to lowercase
+        resources: {}
+  entrypoint: step-template
+  arguments: {}
+
