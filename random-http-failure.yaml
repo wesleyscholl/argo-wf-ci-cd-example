@@ -1,0 +1,143 @@
+metadata:
+  name: nss-test-failure-test
+  generateName: nss-test-failure-test-
+  namespace: new-store-setup
+  uid: 7090320a-5173-4d90-87fc-c056ece9a542
+  resourceVersion: "1046285999"
+  generation: 50
+  creationTimestamp: "2023-09-26T19:27:23Z"
+  labels:
+    sidecar.istio.io/inject: "false"
+    workflows.argoproj.io/creator: K-53GkwaOYQeNgv5clYDKXGK9VPwQnFqd7AHd5ZpFGs
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-08-08T22:12:59Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:generateName: {}
+          f:labels:
+            .: {}
+            f:sidecar.istio.io/inject: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: start-test-fail
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: first-step
+            template: http-retry
+            arguments:
+              parameters:
+                - name: url
+                  value: http://httpstat.us/Random/200
+        - - name: get-status
+            template: http-retry
+            arguments:
+              parameters:
+                - name: url
+                  value: http://httpstat.us/Random/400-404,500-504
+    - name: http-retry
+      inputs:
+        parameters:
+          - name: url
+      outputs: {}
+      metadata: {}
+      http:
+        method: GET
+        url: "{{inputs.parameters.url}}"
+        timeoutSeconds: 20
+        successCondition: response.statusCode == 200
+      retryStrategy:
+        limit: 1
+        retryPolicy: Always
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: notify-slack
+            template: notify-slack
+            arguments: {}
+            when: "{{workflow.status}} == Testing"
+          - name: send-alert
+            template: send-alert
+            arguments: {}
+            when: "{{workflow.status}} == Testing"
+    - name: notify-slack
+      inputs: {}
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /slack
+        env:
+          - name: SLACK_WEBHOOK_URL
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: SLACK_WEBHOOK_URL
+          - name: SLACK_CHANNEL
+            value: "#notify-batch-staging"
+          - name: SLACK_COLOR
+            value: '{{= workflow.status == "Succeeded" ? "good" : "danger" }}'
+          - name: SLACK_TITLE
+            value: "{{workflow.name}} {{workflow.status}}"
+          - name: SLACK_USER_NAME
+            value: ArgoHelper
+          - name: SLACK_TITLE_LINK
+            value: >-
+              https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+          - name: SLACK_FOOTER_ICON
+            value: https://argoproj.github.io/favicon-32x32.png
+          - name: SLACK_FOOTER
+            value: Argo-Workflow
+          - name: SLACK_ICON_EMOJI
+            value: ":wookiedog:"
+        resources: {}
+        imagePullPolicy: IfNotPresent
+    - name: send-alert
+      inputs:
+        parameters:
+          - name: email
+            valueFrom:
+              configMapKeyRef:
+                name: notify-email-address
+                key: email
+                optional: true
+              default: wscholl@totalwine.com
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /mail.sh
+        args:
+          - wscholl@totalwine.com
+          - "{{workflow.name}} {{workflow.status}}"
+          - >-
+            {{workflow.name}} {{workflow.status}} {{workflow.duration}} 
+
+            https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+        env:
+          - name: MAIL_KEY
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: MAIL_KEY
+        resources: {}
+        imagePullPolicy: IfNotPresent
+  entrypoint: start-test-fail
+  arguments: {}
