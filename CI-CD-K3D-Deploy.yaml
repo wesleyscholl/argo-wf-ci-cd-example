@@ -1,0 +1,393 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ci-deploy-workflow
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: "{{workflow.parameters.repo}}"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+        - - name: prepare-deploy-to-cluster-e2e-test
+            template: prepare-deploy-to-cluster-e2e-test
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: exec-path
+                  value: "{{workflow.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{workflow.parameters.cli-path}}"
+            hooks:
+              error:
+                template: exit-handler
+                arguments: {}
+                expression: >-
+                  steps['prepare-deploy-to-cluster-e2e-test'].status == "Error"
+                  || steps['prepare-deploy-to-cluster-e2e-test'].status ==
+                  "Failed"
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+          - name: branch
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - "--depth"
+          - "1"
+          - "--branch"
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - "--single-branch"
+          - "{{inputs.parameters.repo}}"
+          - .
+        workingDir: /work
+        resources:
+          limits:
+            cpu: "6"
+            memory: 6Gi
+          requests:
+            cpu: "4"
+            memory: 4Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: prepare-deploy-to-cluster-e2e-test
+      inputs:
+        parameters:
+          - name: image
+          - name: exec-path
+          - name: cli-path
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - bash
+          - "-c"
+        args:
+          - >
+            DEBIAN_FRONTEND=noninteractive 
+
+            ulimit -n 65536
+
+            apt-get update
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl apt-transport-https ca-certificates gnupg
+            lsb-release sudo make socat git wget
+
+            wget https://go.dev/dl/go1.23.1.linux-amd64.tar.gz
+
+            sudo rm -rf /usr/local/go
+
+            sudo tar -C /usr/local -xzf go1.23.1.linux-amd64.tar.gz
+
+            export PATH=$PATH:/usr/local/go/bin
+
+            source ~/.profile
+
+            go version
+
+            make --version
+
+            sudo apt-get install -y lsof
+
+            echo "Installing k3d..."
+
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+            | bash
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            echo "Downloading and configuring Docker..."
+
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg
+            --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            echo "deb [arch=amd64
+            signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+            https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+            | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            apt-get update && apt-get install -y docker-ce docker-ce-cli
+            containerd.io
+
+            echo "Waiting for Docker daemon to be ready..."
+
+            until docker info; do sleep 3; done
+
+            echo "Docker daemon is ready. Running commands..."
+
+            echo "Pulling images from docker hub..."
+
+            docker pull
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+
+            docker pull
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+
+            docker images
+
+            echo "Creating k3d cluster..."
+
+            k3d cluster create argocluster --kubeconfig-switch-context --image
+            rancher/k3s:v1.31.0-k3s1 &&
+
+            echo "Waiting for k3d cluster to be ready..."
+
+            until kubectl cluster-info; do sleep 3; done
+
+            echo "k3d is ready. Running commands..."
+
+            echo "Merging kubeconfig and switching context to k3d cluster..."
+
+            k3d kubeconfig merge argocluster --kubeconfig-switch-context &&
+
+            kubectl version
+
+            echo "Loading images into k3d cluster..."
+
+            docker save
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            -o /tmp/argoexec.tar
+
+            docker save
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -o /tmp/argocli.tar
+
+            set -eux
+
+            docker load < /tmp/argoexec.tar
+
+            docker load < /tmp/argocli.tar
+
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+            -c argocluster
+
+            k3d image import
+            {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+            -c argocluster
+
+            echo "Setting up the hosts file..."
+
+            echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+            echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+            echo "Installing manifests..."
+
+            make install PROFILE=minimal STATIC_FILES=false
+
+            echo "Checking that pods are running..."
+
+            kubectl get pods -n argo
+
+            echo "Building controller..."
+
+            make controller kit STATIC_FILES=false
+
+            kubectl get pods -n argo
+
+            # echo "Building CLI..."
+
+            # make cli STATIC_FILES=false
+
+            # kubectl get pods -n argo
+
+            echo "Starting argo workflow controller & API..."
+
+            make start PROFILE=minimal AUTH_MODE=client STATIC_FILES=false
+            LOG_LEVEL=info API=false UI=false POD_STATUS_CAPTURE_FINALIZER=true
+            > /tmp/argo.log 2>&1 &
+
+            # make wait PROFILE=minimal API=true 
+
+            make wait PROFILE=minimal API=false
+
+            kubectl get pods -n argo
+
+            echo "Wait for MinIO..."
+
+            until lsof -i :9000 > /dev/null ; do sleep 10s ; done
+
+            kubectl get pods -n argo
+
+            echo "Running E2E tests..."
+
+            # make test-examples E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+
+            # make test-cli E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+
+            make test-cron E2E_SUITE_TIMEOUT=20m STATIC_FILES=false
+
+            kubectl get pods -n argo
+        workingDir: /work/
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          limits:
+            cpu: "16"
+            memory: 16Gi
+          requests:
+            cpu: "15"
+            memory: 14Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: docker-config
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - bash
+          - "-c"
+        args:
+          - >
+            apt-get update
+
+            echo "Installing dependencies..."
+
+            apt-get install -y curl sudo systemd
+
+            echo "Installing kubectl..."
+
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s
+            https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+            chmod +x kubectl
+
+            mv kubectl /usr/local/bin/
+
+            echo "Failure debug - k3s logs"
+
+            journalctl -u k3s
+
+            echo "Failure debug - describe MinIO/MySQL deployment"
+
+            set -eux
+
+            kubectl get deploy
+
+            kubectl describe deploy
+
+            echo "Failure debug - describe MinIO/MySQL pods"
+
+            kubectl get pods -l '!workflows.argoproj.io/workflow'
+
+            kubectl describe pods -l '!workflows.argoproj.io/workflow'
+
+            echo "Failure debug - MinIO/MySQL logs"
+
+            kubectl logs -l '!workflows.argoproj.io/workflow' --prefix
+
+            echo "Failure debug - Controller/API logs"
+
+            [ -e /tmp/argo.log ] && cat /tmp/argo.log
+
+            echo "Failure debug - describe Workflows"
+
+            kubectl get wf
+
+            kubectl describe wf
+
+            echo "Failure debug - describe Workflow pods"
+
+            kubectl get pods -l workflows.argoproj.io/workflow
+
+            kubectl describe pods -l workflows.argoproj.io/workflow
+
+            echo "Failure debug - Workflow Pod logs"
+
+            kubectl logs --all-containers -l workflows.argoproj.io/workflow
+            --prefix
+        resources:
+          limits:
+            cpu: "6"
+            memory: 6Gi
+          requests:
+            cpu: "4"
+            memory: 4Gi
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/argoproj/argo-workflows.git
+      - name: branch
+        value: refs/heads/main
+      - name: name
+        value: wesleyscholl
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com
+      - name: path
+        value: argo-workflows
+      - name: exec-path
+        value: argoexec
+      - name: cli-path
+        value: argocli
+      - name: image
+        value: quay.io/argoproj/
+      - name: tag
+        value: latest
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+      status: {}
