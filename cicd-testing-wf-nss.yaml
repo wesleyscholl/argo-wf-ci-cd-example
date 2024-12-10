@@ -1,0 +1,615 @@
+metadata:
+  name: nss-test-template-qa
+  generateName: nss-test-template-qa-
+  namespace: new-store-setup
+  uid: d2498182-668f-4d9d-8e99-0cb0b8eda068
+  resourceVersion: "1302711044"
+  generation: 53
+  creationTimestamp: "2023-10-04T14:52:58Z"
+  labels:
+    workflows.argoproj.io/creator: K-53GkwaOYQeNgv5clYDKXGK9VPwQnFqd7AHd5ZpFGs
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-12-10T20:38:08Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:generateName: {}
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: clone-repo
+            template: clone-repo
+            arguments:
+              parameters:
+                - name: repo
+                  value: "{{workflow.parameters.repo}}"
+                - name: branch
+                  value: "{{workflow.parameters.branch}}"
+        - - name: build-cli
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Installing dependencies...' && apt-get update &&
+                    apt-get install -y curl sudo 
+
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &&
+                    apt-get install -y nodejs && npm install -g yarn@latest
+
+                    echo 'Building Argo CLI...' && make cli STATIC_FILES=false
+        - - name: create-exec-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: "{{workflow.parameters.exec-path}}"
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: tag
+                  value: "{{workflow.parameters.tag}}"
+        - - name: create-cli-image
+            template: create-image
+            arguments:
+              parameters:
+                - name: path
+                  value: "{{workflow.parameters.cli-path}}"
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: tag
+                  value: "{{workflow.parameters.tag}}"
+        - - name: run-tests
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Running unit tests...' && make test STATIC_FILES=false
+                    GOTEST='go test -p 20 -covermode=atomic
+                    -coverprofile=coverage.out'
+          - name: run-coverage
+            template: golang-step
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo 'Collecting code coverage...'&& make coverage
+                    STATIC_FILES=false && echo 'Code coverage report:' && go
+                    tool cover -func=coverage.out
+        - - name: e2e-tests-dag
+            template: e2e-tests-dag
+            arguments:
+              parameters:
+                - name: image
+                  value: "{{workflow.parameters.image}}"
+                - name: exec-path
+                  value: "{{workflow.parameters.exec-path}}"
+                - name: cli-path
+                  value: "{{workflow.parameters.cli-path}}"
+                - name: tag
+                  value: "{{workflow.parameters.tag}}"
+                - name: test
+                  value: "{{item.test}}"
+                - name: install_k3d_version
+                  value: "{{item.install_k3d_version}}"
+                - name: profile
+                  value: "{{item.profile}}"
+                - name: use-api
+                  value: "{{item.use-api}}"
+            withParam: "{{workflow.parameters.test-matrix}}"
+    - name: e2e-tests-dag
+      inputs:
+        parameters:
+          - name: image
+          - name: exec-path
+          - name: cli-path
+          - name: tag
+          - name: test
+          - name: install_k3d_version
+          - name: profile
+          - name: use-api
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: prepare-deploy-to-cluster-run-e2e-tests
+            template: generic-ubuntu
+            arguments:
+              parameters:
+                - name: test
+                  value: "{{inputs.parameters.test}}"
+                - name: install_k3d_version
+                  value: "{{inputs.parameters.install_k3d_version}}"
+                - name: profile
+                  value: "{{inputs.parameters.profile}}"
+                - name: use-api
+                  value: "{{inputs.parameters.use-api}}"
+                - name: commands
+                  value: >
+                    echo "Installing dependencies..." && apt-get update &&
+                    apt-get install -y curl apt-transport-https ca-certificates
+                    gnupg lsb-release sudo golang make socat git
+
+                    echo "export PATH=$PATH:/usr/local/go/bin" | tee -a 
+
+                    go version && make --version && sudo apt-get install -y lsof
+
+                    echo "Installing k3d..." && curl -s
+                    https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+                    | bash
+
+                    echo "Installing kubectl..." && curl -LO
+                    "https://dl.k8s.io/release/$(curl -L -s
+                    https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+                    chmod +x kubectl && mv kubectl /usr/local/bin/
+
+                    echo "Downloading and configuring Docker..." && curl -fsSL
+                    https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor
+                    -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+                    echo "deb [arch=amd64
+                    signed-by=/usr/share/keyrings/docker-archive-keyring.gpg]
+                    https://download.docker.com/linux/ubuntu $(lsb_release -cs)
+                    stable" | tee /etc/apt/sources.list.d/docker.list >
+                    /dev/null && apt-get update && apt-get install -y docker-ce
+                    docker-ce-cli containerd.io # Install Docker, CLI and
+                    containerd
+
+                    echo "Waiting for Docker daemon to be ready..." && until
+                    docker info; do sleep 3; done
+
+                    echo "Checking for SDK requirements:
+                    {{inputs.parameters.test}}"
+
+                    if [ "{{inputs.parameters.test}}" = "test-java-sdk" ]; then
+                    # Check for Java SDK
+                      echo "Installing Java..."
+                      apt-get update && apt-get install -y openjdk-8-jdk maven
+                      java -version
+                    elif [ "{{inputs.parameters.test}}" = "test-python-sdk" ];
+                    then
+                      echo "Installing Python..."
+                      apt-get update && apt-get install -y python3 python3-pip
+                      python3 --version 
+                    else
+                      echo "No SDK installation required."
+                    fi
+
+                    echo "Creating k3d cluster..." 
+
+                    k3d cluster create argocluster --kubeconfig-switch-context
+                    --image
+                    rancher/k3s:{{inputs.parameters.install_k3d_version}}
+
+                    echo "Waiting for k3d cluster to be ready..." && until
+                    kubectl cluster-info; do sleep 3; done
+
+                    echo "k3d is ready, Merging kubeconfig and switching context
+                    to k3d cluster..." && k3d kubeconfig merge argocluster
+                    --kubeconfig-switch-context && kubectl version
+
+                    echo "Pulling images from docker hub..."
+
+                    docker pull
+                    {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+
+                    docker pull
+                    {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+
+                    docker images && echo "Loading images into k3s cluster..."
+
+                    docker save
+                    {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+                    -o /tmp/argoexec.tar
+
+                    docker save
+                    {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+                    -o /tmp/argocli.tar
+
+                    set -eux
+
+                    docker load < /tmp/argoexec.tar
+
+                    docker load < /tmp/argocli.tar
+
+                    k3d image import
+                    {{inputs.parameters.image}}{{inputs.parameters.exec-path}}:{{workflow.parameters.tag}}
+                    -c argocluster
+
+                    k3d image import
+                    {{inputs.parameters.image}}{{inputs.parameters.cli-path}}:{{workflow.parameters.tag}}
+                    -c argocluster
+
+                    echo "Setting up the hosts file..."
+
+                    echo '127.0.0.1 dex'      | sudo tee -a /etc/hosts
+
+                    echo '127.0.0.1 minio'    | sudo tee -a /etc/hosts
+
+                    echo '127.0.0.1 postgres' | sudo tee -a /etc/hosts
+
+                    echo '127.0.0.1 mysql'    | sudo tee -a /etc/hosts
+
+                    echo '127.0.0.1 azurite'  | sudo tee -a /etc/hosts
+
+                    echo "Installing manifests..." && make install
+                    PROFILE={{inputs.parameters.profile}} STATIC_FILES=false
+
+                    echo "Building the controller..." && make controller kit
+                    STATIC_FILES=false
+
+                    if {{inputs.parameters.use-api}}; then
+                      echo "Building the CLI..." && make cli STATIC_FILES=false
+                    fi
+
+                    echo "Starting argo workflow controller & API..." && make
+                    start PROFILE={{inputs.parameters.profile}} AUTH_MODE=client
+                    STATIC_FILES=false LOG_LEVEL=info
+                    API={{inputs.parameters.use-api}} UI=false
+                    POD_STATUS_CAPTURE_FINALIZER=true > /tmp/argo.log 2>&1 &
+
+                    make wait PROFILE={{inputs.parameters.profile}}
+                    API={{inputs.parameters.use-api}}
+
+                    echo "Wait for MinIO..." && until lsof -i :9000 > /dev/null
+                    ; do sleep 10s ; done
+
+                    echo "Running E2E {{inputs.parameters.test}} tests..." &&
+                    make {{inputs.parameters.test}} E2E_SUITE_TIMEOUT=20m
+                    STATIC_FILES=false
+                - name: cpu
+                  value: "12"
+                - name: memory
+                  value: 32Gi
+                - name: working-dir
+                  value: /work/
+    - name: golang-step
+      inputs:
+        parameters:
+          - name: commands
+      outputs: {}
+      nodeSelector:
+        app: sipapi
+      metadata: {}
+      container:
+        name: ""
+        image: golang:1.23
+        command:
+          - /bin/sh
+          - "-c"
+        args:
+          - "{{inputs.parameters.commands}}"
+        workingDir: /work/{{workflow.parameters.path}}
+        env:
+          - name: GO111MODULE
+            value: "on"
+        resources:
+          requests:
+            cpu: "12"
+            memory: 32Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      tolerations:
+        - key: app
+          operator: Equal
+          value: twmapp
+          effect: NoSchedule
+    - name: create-image
+      inputs:
+        parameters:
+          - name: path
+          - name: image
+          - name: tag
+      outputs: {}
+      nodeSelector:
+        app: sipapi
+      metadata: {}
+      container:
+        name: ""
+        image: moby/buildkit:v0.9.3-rootless
+        command:
+          - buildctl-daemonless.sh
+        args:
+          - build
+          - "--frontend"
+          - dockerfile.v0
+          - "--local"
+          - context=.
+          - "--local"
+          - dockerfile=.
+          - "--output"
+          - >-
+            type=image,name={{inputs.parameters.image}}{{inputs.parameters.path}}:{{inputs.parameters.tag}},push=true
+          - "--opt"
+          - target={{inputs.parameters.path}}
+        workingDir: /work/{{workflow.parameters.path}}
+        env:
+          - name: BUILDKITD_FLAGS
+            value: "--oci-worker-no-process-sandbox"
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources:
+          requests:
+            cpu: "12"
+            memory: 32Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+        readinessProbe:
+          exec:
+            command:
+              - sh
+              - "-c"
+              - buildctl debug workers
+      volumes:
+        - name: docker-config
+          configMap:
+            name: >-
+              crs-56953-nss-3-argo-store-location-endpoints-docker-config-qa-k88bm5625c
+            items:
+              - key: config.json
+                path: config.json
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+      tolerations:
+        - key: app
+          operator: Equal
+          value: twmapp
+          effect: NoSchedule
+    - name: generic-ubuntu
+      inputs:
+        parameters:
+          - name: image
+            default: "{{workflow.parameters.image}}"
+            description: Docker image prefix
+          - name: exec-path
+            default: "{{workflow.parameters.exec-path}}"
+          - name: cli-path
+            default: "{{workflow.parameters.cli-path}}"
+          - name: test
+            default: test-executor
+          - name: install_k3d_version
+            default: v1.31.0-k3s1
+          - name: profile
+            default: minimal
+          - name: use-api
+            default: "false"
+          - name: image-tag
+            default: "{{workflow.parameters.tag}}"
+          - name: app-name
+            default: "{{workflow.parameters.path}}"
+          - name: commands
+            description: Commands to run
+          - name: cpu
+            default: "1"
+          - name: memory
+            default: 2Gi
+      outputs: {}
+      nodeSelector:
+        app: sipapi
+      metadata: {}
+      container:
+        name: ""
+        image: ubuntu:latest
+        command:
+          - sh
+          - "-c"
+        args:
+          - |
+            {{inputs.parameters.commands}}
+        workingDir: /work/{{workflow.parameters.path}}
+        env:
+          - name: DOCKER_HOST
+            value: tcp://localhost:2375
+          - name: DOCKER_CONFIG
+            value: /.docker
+        resources: {}
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: docker-config
+            mountPath: /.docker
+      volumes:
+        - name: docker-config
+          configMap:
+            name: >-
+              crs-56953-nss-3-argo-store-location-endpoints-docker-config-qa-k88bm5625c
+            items:
+              - key: config.json
+                path: config.json
+      sidecars:
+        - name: dind
+          image: docker:20.10-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+          resources: {}
+          securityContext:
+            privileged: true
+          mirrorVolumeMounts: true
+      tolerations:
+        - key: app
+          operator: Equal
+          value: twmapp
+          effect: NoSchedule
+      podSpecPatch: |
+        containers:
+          - name: main
+            resources:
+              requests:
+                cpu: "{{inputs.parameters.cpu}}" 
+                memory: "{{inputs.parameters.memory}}"
+    - name: clone-repo
+      inputs:
+        parameters:
+          - name: repo
+            default: "{{workflow.parameters.repo}}"
+          - name: branch
+            default: "{{workflow.parameters.branch}}"
+      outputs: {}
+      metadata: {}
+      container:
+        name: ""
+        image: alpine/git:v2.26.2
+        args:
+          - clone
+          - "--depth"
+          - "1"
+          - "--branch"
+          - '{{=sprig.trimPrefix("refs/heads/",inputs.parameters.branch)}}'
+          - "--single-branch"
+          - "{{inputs.parameters.repo}}"
+        workingDir: /work
+        resources:
+          requests:
+            cpu: "1"
+            memory: 2Gi
+        volumeMounts:
+          - name: work
+            mountPath: /work
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: notify-slack
+            template: notify-slack
+            arguments: {}
+            when: "{{workflow.status}} == Testing"
+          - name: send-alert
+            template: send-alert
+            arguments: {}
+            when: "{{workflow.status}} == Testing"
+    - name: notify-slack
+      inputs: {}
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /slack
+        env:
+          - name: SLACK_WEBHOOK_URL
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: SLACK_WEBHOOK_URL
+          - name: SLACK_CHANNEL
+            value: "#notify-batch-staging"
+          - name: SLACK_COLOR
+            value: '{{= workflow.status == "Succeeded" ? "good" : "danger" }}'
+          - name: SLACK_TITLE
+            value: "{{workflow.name}} {{workflow.status}}"
+          - name: SLACK_USER_NAME
+            value: ArgoHelper
+          - name: SLACK_TITLE_LINK
+            value: >-
+              https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+          - name: SLACK_FOOTER_ICON
+            value: https://argoproj.github.io/favicon-32x32.png
+          - name: SLACK_FOOTER
+            value: Argo-Workflow
+          - name: SLACK_ICON_EMOJI
+            value: ":wookiedog:"
+        resources: {}
+        imagePullPolicy: IfNotPresent
+    - name: send-alert
+      inputs:
+        parameters:
+          - name: email
+            valueFrom:
+              configMapKeyRef:
+                name: notify-email-address
+                key: email
+                optional: true
+              default: wscholl@totalwine.com
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /mail.sh
+        args:
+          - wscholl@totalwine.com
+          - "{{workflow.name}} {{workflow.status}}"
+          - >-
+            {{workflow.name}} {{workflow.status}} {{workflow.duration}} 
+
+            https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+        env:
+          - name: MAIL_KEY
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: MAIL_KEY
+        resources: {}
+        imagePullPolicy: IfNotPresent
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: repo
+        value: https://github.com/argoproj/argo-workflows.git
+      - name: branch
+        value: refs/heads/main
+      - name: name
+        value: wesleyscholl
+      - name: email
+        value: 128409641+wesleyscholl@users.noreply.github.com
+      - name: path
+        value: argo-workflows
+      - name: exec-path
+        value: argoexec
+      - name: cli-path
+        value: argocli
+      - name: image
+        value: quay.io/argoproj/
+      - name: tag
+        value: latest
+      - name: test-matrix
+        value: |
+          [
+            {
+              "test": "test-corefunctional",
+              "install_k3d_version": "v1.31.0-k3s1",
+              "profile": "minimal",
+              "use-api": false
+            }
+          ]
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+      status: {}

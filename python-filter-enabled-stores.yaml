@@ -1,0 +1,292 @@
+metadata:
+  name: nss-test-kickoff
+  generateName: nss-test-kickoff-
+  namespace: new-store-setup
+  uid: a8cff2ff-00a6-49c4-8c83-903f4e62f77c
+  resourceVersion: "962154653"
+  generation: 16
+  creationTimestamp: "2023-08-25T20:57:14Z"
+  labels:
+    workflows.argoproj.io/creator: K-53GkwaOYQeNgv5clYDKXGK9VPwQnFqd7AHd5ZpFGs
+  managedFields:
+    - manager: argo
+      operation: Update
+      apiVersion: argoproj.io/v1alpha1
+      time: "2024-07-01T16:54:45Z"
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:generateName: {}
+          f:labels:
+            .: {}
+            f:workflows.argoproj.io/creator: {}
+        f:spec: {}
+spec:
+  templates:
+    - name: start-po-opt
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: get-store-config
+            template: http-get
+            arguments:
+              parameters:
+                - name: url
+                  value: >-
+                    https://sipaksservicesdev.totalwine.com/purchase-order/crs-48603-solutionsetup-pooptconfigapi/api/v1.0/GetAll
+                - name: httpmethod
+                  value: GET
+        - - name: filter-stores
+            template: filter-stores
+            arguments:
+              parameters:
+                - name: store_data
+                  value: "{{steps.get-store-config.outputs.result}}"
+                - name: store_keys
+                  value: "{{workflow.parameters.store_keys}}"
+        - - name: process-stores
+            template: process-stores
+            arguments:
+              parameters:
+                - name: store_data
+                  value: "{{steps.filter-stores.outputs.result}}"
+    - name: process-stores
+      inputs:
+        parameters:
+          - name: store_data
+      outputs: {}
+      metadata: {}
+      dag:
+        tasks:
+          - name: gurobi-process-store
+            template: gurobi-process-store
+            arguments:
+              parameters:
+                - name: store
+                  value: "{{item}}"
+            withParam: "{{inputs.parameters.store_data}}"
+      parallelism: 1
+    - name: filter-stores
+      inputs:
+        parameters:
+          - name: store_data
+          - name: store_keys
+      outputs:
+        parameters:
+          - name: filtered_store_data
+            valueFrom:
+              path: /tmp/filtered_store_data.json
+      metadata: {}
+      script:
+        name: filter-stores-isGurobiEnabled
+        image: python:3.9
+        command:
+          - python
+        env:
+          - name: INPUT_STORE_DATA
+            value: "{{inputs.parameters.store_data}}"
+          - name: INPUT_STORE_KEYS
+            value: "{{inputs.parameters.store_keys}}"
+        resources: {}
+        source: |
+          import os
+          import json
+          import re
+          import sys
+          import logging
+
+          # Configure logging
+          logger = logging.getLogger(__name__)
+          logging.basicConfig(level=logging.DEBUG)
+
+          # Read input parameters from environment variables
+          store_data_json = os.getenv('INPUT_STORE_DATA')
+          store_keys_json = os.getenv('INPUT_STORE_KEYS')
+
+          # Validate store_data input
+          if store_data_json is None:
+            logger.error("Error: store_data parameter is missing")
+            sys.exit(1)
+
+          # Parse store_keys input, default to empty list if not provided
+          if store_keys_json is None:
+            store_keys = []
+          else:
+            try:
+                store_keys = json.loads(store_keys_json)
+            except json.JSONDecodeError:
+                logger.error(f"Error: Invalid JSON format for store_keys: {store_keys_json}")
+                sys.exit(1)
+
+          # Validate store_keys format
+          if not isinstance(store_keys, list):
+            logger.error(f"Error: store_keys must be a list, got {type(store_keys).__name__}")
+            sys.exit(1)
+
+          # Validate and normalize individual store keys
+          valid_keys = []
+          for key in store_keys:
+            if isinstance(key, (int, str)):
+                str_key = str(key).strip()
+                if re.match(r'^\d+$', str_key):
+                    valid_keys.append(str_key)
+                else:
+                    logger.debug(f"Warning: Invalid store key: '{key}'. Keys must be integers or strings of digits.")
+            else:
+                logger.debug(f"Warning: Invalid type for store key: {type(key).__name__}. Must be int or str.")
+
+          # Parse store data
+          try:
+            store_data = json.loads(store_data_json)
+          except json.JSONDecodeError:
+            logger.error("Error: Invalid JSON format for store_data")
+            sys.exit(1)
+
+          filtered_stores = []
+          missing_keys = []
+          disabled_keys = []
+
+          # Filter stores based on provided keys (if any)
+          if valid_keys:
+            for key in valid_keys:
+                store = next((store for store in store_data if str(store.get("storeKey")) == key), None)
+                if store:
+                    if store.get("isGurobiEnabled", False):
+                        filtered_stores.append(store)
+                    else:
+                        disabled_keys.append(key)
+                else:
+                    missing_keys.append(key)
+
+            # Report any missing or disabled keys
+            if missing_keys:
+                logger.debug(f"Warning: The following store keys were not found: {', '.join(missing_keys)}")
+            if disabled_keys:
+                logger.debug(f"Warning: The following store keys are disabled: {', '.join(disabled_keys)}")
+
+            # Exit if no valid stores were found
+            if len(filtered_stores) == 0:
+                logger.error(f"Error: All provided store keys are either invalid or disabled: {', '.join(missing_keys + disabled_keys)}")
+                sys.exit(1)
+
+          else:
+            # If no keys provided, filter all stores with isGurobiEnabled=True
+            filtered_stores = [store for store in store_data if store.get("isGurobiEnabled", False)]
+
+          # Write filtered stores to output file
+          with open('/tmp/filtered_store_data.json', 'w') as f:
+            json.dump(filtered_stores, f)
+
+          # Print filtered stores for logging
+          print(json.dumps(filtered_stores))
+          logger.debug(f"Number of filtered stores: {len(filtered_stores)}")
+    - name: gurobi-process-store
+      inputs:
+        parameters:
+          - name: store
+      outputs: {}
+      metadata: {}
+      script:
+        name: gurobi
+        image: node:14-alpine
+        command:
+          - node
+        env:
+          - name: STOREDATA
+            value: "{{inputs.parameters.store}}"
+        resources: {}
+        source: |
+          const store = process.env.STOREDATA; console.log(store);
+    - name: http-get
+      inputs:
+        parameters:
+          - name: url
+          - name: httpmethod
+      outputs: {}
+      metadata: {}
+      http:
+        method: "{{inputs.parameters.httpmethod}}"
+        url: "{{inputs.parameters.url}}"
+        headers:
+          - name: accept
+            value: application/json
+        timeoutSeconds: 60
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+    - name: notify-slack
+      inputs: {}
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /slack
+        env:
+          - name: SLACK_WEBHOOK_URL
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: SLACK_WEBHOOK_URL
+          - name: SLACK_CHANNEL
+            value: "#notify-batch-staging"
+          - name: SLACK_COLOR
+            value: '{{= workflow.status == "Succeeded" ? "good" : "danger" }}'
+          - name: SLACK_TITLE
+            value: "{{workflow.name}} {{workflow.status}}"
+          - name: SLACK_USER_NAME
+            value: ArgoHelper
+          - name: SLACK_TITLE_LINK
+            value: >-
+              https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+          - name: SLACK_FOOTER_ICON
+            value: https://argoproj.github.io/favicon-32x32.png
+          - name: SLACK_FOOTER
+            value: Argo-Workflow
+          - name: SLACK_ICON_EMOJI
+            value: ":wookiedog:"
+        resources: {}
+        imagePullPolicy: IfNotPresent
+    - name: send-alert
+      inputs:
+        parameters:
+          - name: email
+            valueFrom:
+              configMapKeyRef:
+                name: notify-email-address
+                key: email
+                optional: true
+              default: wscholl@totalwine.com
+      outputs: {}
+      metadata:
+        labels:
+          sidecar.istio.io/inject: "false"
+      container:
+        name: ""
+        image: sipapexdev.azurecr.io/notifier:2
+        command:
+          - /mail.sh
+        args:
+          - wscholl@totalwine.com
+          - "{{workflow.name}} {{workflow.status}}"
+          - >-
+            {{workflow.name}} {{workflow.status}} {{workflow.duration}} 
+
+            https://sipaksservicesdev.totalwine.com/argo/workflows/{workflow.namespace}}/{workflow.name}}?tab=workflow
+        env:
+          - name: MAIL_KEY
+            valueFrom:
+              secretKeyRef:
+                name: notifer
+                key: MAIL_KEY
+        resources: {}
+        imagePullPolicy: IfNotPresent
+  entrypoint: start-po-opt
+  arguments:
+    parameters:
+      - name: store_keys
+        value: "[]"
