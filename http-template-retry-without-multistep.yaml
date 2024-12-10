@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: http-template-retry-without-multistep
+  namespace: new-store-setup
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: http-retry-fail
+            template: http
+            arguments:
+              parameters:
+                - name: url
+                  value: >-
+                    https://www.randomnumberapi.com/api/v1.0/random?min=200&max=210&count=1
+    - name: http
+      inputs:
+        parameters:
+          - name: url
+      outputs: {}
+      metadata: {}
+      http:
+        url: "{{inputs.parameters.url}}"
+        timeoutSeconds: 15
+        successCondition: response.body contains "200"
+        body: "{{workflow.parameters.datainput}}"
+      retryStrategy:
+        limit: "2"
+        retryPolicy: Always
+        backoff:
+          duration: 5s
+          factor: 1
+          maxDuration: 1m
+    - name: exit-handler
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: notify-slack
+            template: node
+            arguments: {}
+          - name: email-alert
+            template: node
+            arguments: {}
+    - name: node
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      script:
+        name: node
+        image: node
+        command:
+          - node
+        resources: {}
+        source: |
+          console.log("{{workflow.parameters.datainput}}")
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: datainput
+        value: "1234"
+  onExit: exit-handler
