@@ -1,0 +1,59 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: trigger-argocd
+  namespace: argo
+spec:
+  templates:
+    - name: main
+      inputs: {}
+      outputs: {}
+      metadata: {}
+      steps:
+        - - name: start-argocd-sync
+            template: ubuntu
+            arguments:
+              parameters:
+                - name: commands
+                  value: >
+                    echo "Installing dependencies..." && apt-get update && apt-get install -y curl sudo
+
+                    curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64 # Download and Install Argo CD then remove the downloaded file
+
+                    echo "Logging in to Argo CD..." && argocd login localhost:8080 --username admin --password q6ARHJHkKfMoy60q --insecure
+
+                    echo "Syncing the application..." && argocd app sync {{workflow.parameters.path}} # Sync the application
+    - name: ubuntu
+      inputs:
+        parameters:
+          - name: commands
+      container:
+        image: ubuntu:latest
+        command:
+          - sh
+          - "-c"
+        args:
+          - "{{inputs.parameters.commands}}"
+  entrypoint: main
+  parameters:
+    - name: path
+      value: argo-workflows
+
+---
+
+"locationKey": 582,
+"locationName": "761 - Total Wine - 761 - Johnson City",
+"locationStatus": "Active",
+"streetAddress": "Not",
+"extendedAddress": "",
+"placeName": "18 Main St",
+"locality": "Johnson City",
+"region": "",
+"postalCode": "13790",
+"countryName": "United States of America",
+"latitude": 42.1113001,
+"longitude": -75.946107,
+"note": "string" (storeDraftStatusKey),
+"timeZone": "Eastern Standard Time",
+"serviceModifier": "NSSArgoWorkflow",
+"correlationId": "761", (storeDraftKey)

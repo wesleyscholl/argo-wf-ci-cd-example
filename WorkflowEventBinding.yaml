@@ -1,3 +1,5 @@
+
+kubectl apply - f <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowEventBinding
 metadata:
@@ -26,3 +28,40 @@ spec:
         - name: path # GitHub repository name
           valueFrom:
             event: payload.repository.name # i.e. argo-workflows
+EOF
+
+---
+
+
+kubectl apply -n new-store-setup -f - <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowEventBinding
+metadata:
+  name: webhook-event-consumer
+  namespace: new-store-setup
+spec:
+  event:
+    selector: payload.repository.html_url != "" && payload.ref != "" && payload.pusher.name != "" && payload.pusher.email != "" && payload.repository.name != ""
+  submit: 
+    workflowTemplateRef: 
+      name: nss-test-template-qa
+    arguments:
+      parameters: 
+        - name: repo
+          valueFrom:
+            event: payload.repository.html_url
+        - name: branch
+          valueFrom:
+            event: payload.ref
+        - name: name
+          valueFrom:
+            event: payload.pusher.name
+        - name: email
+          valueFrom:
+            event: payload.pusher.email
+        - name: path
+          valueFrom:
+            event: payload.repository.name
+EOF 
+
+
